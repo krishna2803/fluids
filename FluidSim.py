@@ -63,16 +63,19 @@ class FluidSim:
      |         |
     -----v00----
     '''
-    self.u = np.zeros((N + 1, N))
-    self.v = np.zeros((N, N + 1))
+    self.u = np.random.randn(N + 1, N)
+    self.v = np.random.randn(N, N + 1)
     self.p = np.zeros((N, N))
 
-    self.u_prev = np.zeros((N + 1, N))
-    self.v_prev = np.zeros((N, N + 1))
+    self.u_prev = np.random.randn(N + 1, N)
+    self.v_prev = np.random.randn(N, N + 1)
 
     self.dx = width / N
     self.dy = height / N
-    self.dt = 1.0 / 60
+
+    umax = 50.0
+    self.dt = 5 * self.dx / umax
+
     self.t = 0.0
 
     self.log = dict()
@@ -83,10 +86,10 @@ class FluidSim:
     self.v, self.v_prev = self.v_prev, self.v
 
   def get_u(self, i, j):
-    return (self.u[i, j] + self.u[i+1, j]) * 0.5
+    return (self.u[i, j] + self.u[i + 1, j]) * 0.5
 
   def get_v(self, i, j):
-    return (self.v[i, j] + self.v[i, j+1]) * 0.5
+    return (self.v[i, j] + self.v[i, j + 1]) * 0.5
 
   '''
   Chapter 3.
@@ -157,20 +160,37 @@ class FluidSim:
   def project(self, dt):
     pass
 
+  def boundary(self):
+    N = self.N
+    u = self.u
+    v = self.v
+
+    for k in range(N+1):
+      u[k, 0] = 0
+      u[k, N-1] = 0
+      v[0, k] = 0
+      v[N-1, k] = 0
+
   def add_force(self, row_idx, col_idx, fx, fy, radius=3):
     radius_sq = radius**2
-    for i in range(max(0, row_idx - radius), min(self.N + 1, row_idx + radius + 1)):
-      for j in range(max(0, col_idx - radius), min(self.N + 1, col_idx + radius + 1)):
-        dist_sq = (i - row_idx)**2 + (j - col_idx)**2
 
+    for i in range(max(0, row_idx - radius), min(self.N + 1, row_idx + radius + 1)):
+      for j in range(max(0, col_idx - radius), min(self.N, col_idx + radius + 1)):
+        u_row = i
+        u_col = j + 0.5
+        dist_sq = (u_row - row_idx)**2 + (u_col - col_idx)**2
         if dist_sq < radius_sq:
           strength = 1 - np.sqrt(dist_sq) / radius
+          self.u[i, j] += fx * strength * self.dt
 
-          if i < self.u.shape[0] and j < self.u.shape[1]:
-            self.u[i][j] += fx * strength * self.dt
-
-          if i < self.v.shape[0] and j < self.v.shape[1]:
-            self.v[i][j] += fy * strength * self.dt
+    for i in range(max(0, row_idx - radius), min(self.N, row_idx + radius + 1)):
+      for j in range(max(0, col_idx - radius), min(self.N + 1, col_idx + radius + 1)):
+        v_row = i + 0.5
+        v_col = j
+        dist_sq = (v_row - row_idx)**2 + (v_col - col_idx)**2
+        if dist_sq < radius_sq:
+          strength = 1 - np.sqrt(dist_sq) / radius
+          self.v[i, j] += fy * strength * self.dt
 
   def dump_log(self):
     with open('log.txt', 'w') as f:
