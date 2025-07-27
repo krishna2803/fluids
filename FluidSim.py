@@ -1,6 +1,7 @@
 import numpy as np
 import polyscope as ps
 from tqdm import tqdm
+from numba import jit
 
 '''
 Dq/Dt = 0 (advection)
@@ -20,21 +21,54 @@ D/Dt = d/dt + u d/dx + v d/dy
 dq/dx = (q[i+1/2] - q[i-1/2]) / (dx)
 '''
 
+
+@jit(nopython=True)
+def bilerp(field, x, y, dx, dy, x_off=0.0, y_off=0.0):
+  x_f = (x + x_off) / dx
+  y_f = (y + y_off) / dy
+
+  i = int(np.floor(x_f))
+  j = int(np.floor(y_f))
+
+  a = x_f - i
+  b = y_f - j
+  nx, ny = field.shape
+
+  i0 = max(0, min(i, nx - 1))
+  j0 = max(0, min(j, ny - 1))
+  i1 = max(0, min(i + 1, nx - 1))
+  j1 = max(0, min(j + 1, ny - 1))
+
+  v00 = field[i0, j0]
+  v10 = field[i1, j0]
+  v01 = field[i0, j1]
+  v11 = field[i1, j1]
+
+  return ((1 - a) * (1 - b) * v00 +
+          a * (1 - b) * v10 +
+          (1 - a) * b * v01 +
+          a * b * v11)
+
+
 class FluidSim:
-  def __init__(self, N: int, width: int, height: int):
+  def __init__(self, N: int, width: float, height: float):
     self.N = N
-    self.u = np.zeros((N, N))
-    self.v = np.zeros((N, N))
-    # self.w = np.zeros((N, N, N))
-    self.u_prev = np.zeros((N, N))
-    self.v_prev = np.zeros((N, N))
-    # self.w_prev = np.zeros((N, N, N))
 
+    # MAC Grid
 
-    # randomize
-    # self.u = np.random.uniform(-0.5, 0.5, size=(N, N))
-    # self.v = np.random.uniform(-0.5, 0.5, size=(N, N))
+    '''
+    -----v01----
+     |         |
+    u00  P00  u10
+     |         |
+    -----v00----
+    '''
+    self.u = np.zeros((N + 1, N))
+    self.v = np.zeros((N, N + 1))
+    self.p = np.zeros((N, N))
 
+    self.u_prev = np.zeros((N + 1, N))
+    self.v_prev = np.zeros((N, N + 1))
 
     self.dx = width / N
     self.dy = height / N
@@ -44,10 +78,15 @@ class FluidSim:
     self.log = dict()
     self.log[self.t] = f'{self.u=}\n{self.u_prev=}\n{self.v=}\n{self.v_prev=}'
 
-
   def swap(self):
     self.u, self.u_prev = self.u_prev, self.u
     self.v, self.v_prev = self.v_prev, self.v
+
+  def get_u(self, i, j):
+    return (self.u[i, j] + self.u[i+1, j]) * 0.5
+
+  def get_v(self, i, j):
+    return (self.v[i, j] + self.v[i, j+1]) * 0.5
 
   '''
   Chapter 3.
@@ -70,50 +109,68 @@ class FluidSim:
   q[i]_(n+1) = (1 - a) * q[j]_n + a * q[j+1]_n
   '''
 
-  def advect(self, dt, q, q_prev):
-    u = self.u
-    v = self.v
-  
+  def advect_u(self):
     dx = self.dx
     dy = self.dy
+    dt = self.dt
     N = self.N
-    
-    for i in range(N):
+
+    for i in range(N + 1):
       for j in range(N):
         x_i = dx * i
+        y_i = dy * (j + 0.5)
+
+        u_here = bilerp(self.u_prev, x_i, y_i, dx, dy)
+        v_here = bilerp(self.v_prev, x_i, y_i, dx, dy, x_off=-0.5 * dx)
+
+        x_P = x_i - dt * u_here
+        y_P = y_i - dt * v_here
+
+        self.u[i, j] = bilerp(self.u_prev, x_P, y_P, dx, dy, y_off=-0.5 * dy)
+
+  def advect_v(self):
+    dx = self.dx
+    dy = self.dy
+    dt = self.dt
+    N = self.N
+
+    for i in range(N):
+      for j in range(N + 1):
+        x_i = dx * (i + 0.5)
         y_i = dy * j
-        
-        x_P = x_i - dt * u[i][j]
-        y_P = y_i - dt * v[i][j]
-        
-        k = int(np.floor(x_P / dx))
-        l = int(np.floor(y_P / dy))
-        
-        k = max(0, min(k, self.N-2))
-        l = max(0, min(l, self.N-2))    
-        
-        x_k = dx * k
-        y_l = dy * l
-        
-        a = (x_P - x_k) / dx
-        b = (y_P - y_l) / dy
-        
-        q[i][j] = ((1 - a) * (1 - b) * q_prev[k][l] + 
-                       a * (1 - b) * q_prev[k+1][l] + 
-                       (1 - a) * b * q_prev[k][l+1] + 
-                       a * b * q_prev[k+1][l+1])
 
-    self.t += dt
-    self.log[self.t] = f'{self.u=}\n{self.u_prev=}\n{self.v=}\n{self.v_prev=}'
+        u_here = bilerp(self.u_prev, x_i, y_i, dx, dy, y_off=-0.5 * dy)
+        v_here = bilerp(self.v_prev, x_i, y_i, dx, dy)
 
-  def add_force(self, x, y, fx, fy, radius=3):
-    for i in range(max(0, x-radius), min(self.N, x+radius+1)):
-      for j in range(max(0, y-radius), min(self.N, y+radius+1)):
-        dist = np.sqrt((i-x)**2 + (j-y)**2)
-        if dist <= radius:
-          strength = max(0, 1 - dist/radius)
-          self.u[i][j] += fx * strength * self.dt
-          self.v[i][j] += fy * strength * self.dt
+        x_P = x_i - dt * u_here
+        y_P = y_i - dt * v_here
+
+        self.v[i, j] = bilerp(self.v_prev, x_P, y_P, dx, dy, x_off=-0.5 * dx)
+
+  def dampen(self, factor=0.8):
+    u = self.u
+    v = self.v
+
+    u *= factor
+    v *= factor
+
+  def project(self, dt):
+    pass
+
+  def add_force(self, row_idx, col_idx, fx, fy, radius=3):
+    radius_sq = radius**2
+    for i in range(max(0, row_idx - radius), min(self.N + 1, row_idx + radius + 1)):
+      for j in range(max(0, col_idx - radius), min(self.N + 1, col_idx + radius + 1)):
+        dist_sq = (i - row_idx)**2 + (j - col_idx)**2
+
+        if dist_sq < radius_sq:
+          strength = 1 - np.sqrt(dist_sq) / radius
+
+          if i < self.u.shape[0] and j < self.u.shape[1]:
+            self.u[i][j] += fx * strength * self.dt
+
+          if i < self.v.shape[0] and j < self.v.shape[1]:
+            self.v[i][j] += fy * strength * self.dt
 
   def dump_log(self):
     with open('log.txt', 'w') as f:
