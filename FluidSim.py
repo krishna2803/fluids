@@ -2,6 +2,8 @@ import numpy as np
 import polyscope as ps
 from tqdm import tqdm
 from numba import jit
+import scipy as sp
+from scipy.sparse import coo_matrix
 
 '''
 Dq/Dt = 0 (advection)
@@ -48,6 +50,18 @@ def bilerp(field, x, y, dx, dy, x_off=0.0, y_off=0.0):
           a * (1 - b) * v10 +
           (1 - a) * b * v01 +
           a * b * v11)
+
+
+@jit(nopython=True)
+def divergence(u, v, dx, dy):
+  N = u.shape[1]
+  div = np.zeros((N, N))
+
+  for i in range(N):
+    for j in range(N):
+      div[i, j] = (u[i + 1, j] - u[i, j]) / dx + (v[i, j + 1] - v[i, j]) / dy
+
+  return div
 
 
 class FluidSim:
@@ -157,19 +171,35 @@ class FluidSim:
     u *= factor
     v *= factor
 
-  def project(self, dt):
-    pass
+  '''
+    the project(∆t, ~u) routine does the following:
+    • Calculate the divergence d (the right-hand side) with modifications at solid wall boundaries.
+    • Set the entries of A (stored in Adiag etc.).
+    • Construct the MIC(0) preconditioner.
+    • Solve Ap = d with MICCG(0), i.e. the PCG algorithm with MIC(0) as preconditioner.
+    • Compute the new velocities ~un+1 according to the pressure gradient update to ~u.
+  '''
+
+  def project(self, q, q_prev):
+    u = self.u
+    v = self.v
+    dx = self.dx
+    dy = self.dy
+    dt = self.dt
+    N = self.N
+
+    div = divergence(u, v, dx, dy)
 
   def boundary(self):
     N = self.N
     u = self.u
     v = self.v
 
-    for k in range(N+1):
+    for k in range(N + 1):
       u[k, 0] = 0
-      u[k, N-1] = 0
+      u[k, N - 1] = 0
       v[0, k] = 0
-      v[N-1, k] = 0
+      v[N - 1, k] = 0
 
   def add_force(self, row_idx, col_idx, fx, fy, radius=3):
     radius_sq = radius**2
