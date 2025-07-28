@@ -214,9 +214,11 @@ class FluidSim:
   def dampen(self, factor=0.8):
     u = self.u
     v = self.v
+    p = self.p
 
     u *= factor
     v *= factor
+    p *= factor    
 
   '''
     the project(∆t, u) routine does the following:
@@ -230,6 +232,7 @@ class FluidSim:
   def project(self):
     u = self.u
     v = self.v
+    p = self.p
     dx = self.dx
     dy = self.dy
     dt = self.dt
@@ -245,7 +248,8 @@ class FluidSim:
     rhs = -div.flatten()
     p_flat, info = cg(self._A_matrix, rhs, M=self._M_op, rtol=1e-6, maxiter=100)
     p = p_flat.reshape((N, N))
-    
+    self.p = p
+
     for i in range(1, N):
       for j in range(N):
         u[i, j] -= dt * (p[i, j] - p[i-1, j]) / dx

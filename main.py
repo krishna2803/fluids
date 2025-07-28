@@ -47,6 +47,9 @@ arrow_tex = arrow_surf.convert_alpha()
 
 fs = FluidSim(N, WINDOW_SIZE / 4, WINDOW_SIZE / 4)
 mouse_pressed = False
+show_pressure = True
+show_velocity = True
+ctr = 0
 
 
 def get_velocity_color(u, v):
@@ -73,6 +76,10 @@ while running:
       mouse_pressed = False
     elif e.type == pygame.KEYDOWN and e.key == pygame.K_r:
       fs = FluidSim(N, WINDOW_SIZE, WINDOW_SIZE)
+    elif e.type == pygame.KEYDOWN and e.key == pygame.K_p:
+      show_pressure = not show_pressure
+    elif e.type == pygame.KEYDOWN and e.key == pygame.K_v:
+      show_velocity = not show_velocity
 
   if mouse_pressed:
     mx, my = pygame.mouse.get_pos()
@@ -93,29 +100,58 @@ while running:
   fs.dampen(0.70)
 
   screen.fill(WHITE)
-  for i in range(N):
-    for j in range(N):
-      u, v = fs.get_u(i, j), fs.get_v(i, j)
-      mag = math.hypot(u, v)
-      x = j * CELL_SIZE + CELL_SIZE // 2
-      y = i * CELL_SIZE + CELL_SIZE // 2
 
-      if mag < ARROW_THRESHOLD:
-        pygame.draw.circle(screen, GRAY, (x, y), 1)
-        continue
+  if show_pressure:
+    max_pressure = max(abs(fs.p.max()), abs(fs.p.min())
+                       ) if fs.p.max() != fs.p.min() else 1.0
+    for i in range(N):
+      for j in range(N):
+        pressure = fs.p[i, j]
+        if max_pressure > 0:
+          norm_pressure = abs(pressure) / max_pressure
+        else:
+          norm_pressure = 0
 
-      theta = math.degrees(math.atan2(v, u)) + 90
-      angle = -theta
+        # Scale down for better visibility
+        blue_intensity = int(255 * norm_pressure * 0.5)
+        pressure_color = (255 - blue_intensity, 255 - blue_intensity, 255)
 
-      scale = min(mag * 3, 1.0)
+        x_rect = j * CELL_SIZE
+        y_rect = i * CELL_SIZE
+        pressure_rect = pygame.Rect(x_rect, y_rect, CELL_SIZE, CELL_SIZE)
+        pygame.draw.rect(screen, pressure_color, pressure_rect)
 
-      color = get_velocity_color(u, v)
-      tinted = arrow_tex.copy()
-      tinted.fill(color, special_flags=pygame.BLEND_RGB_MULT)
+        # pygame.draw.rect(screen, GRAY, pressure_rect, 1)
 
-      rot = pygame.transform.rotozoom(tinted, angle, scale)
-      rect = rot.get_rect(center=(x, y))
-      screen.blit(rot, rect)
+  if show_velocity:
+    for i in range(N):
+      for j in range(N):
+        u, v = fs.get_u(i, j), fs.get_v(i, j)
+        mag = math.hypot(u, v)
+        x = j * CELL_SIZE + CELL_SIZE // 2
+        y = i * CELL_SIZE + CELL_SIZE // 2
+
+        if mag < ARROW_THRESHOLD:
+          pygame.draw.circle(screen, GRAY, (x, y), 1)
+          continue
+
+        theta = math.degrees(math.atan2(v, u)) + 90
+        angle = -theta
+
+        scale = min(mag * 3, 1.0)
+
+        color = get_velocity_color(u, v)
+        tinted = arrow_tex.copy()
+        tinted.fill(color, special_flags=pygame.BLEND_RGB_MULT)
+
+        rot = pygame.transform.rotozoom(tinted, angle, scale)
+        rect = rot.get_rect(center=(x, y))
+        screen.blit(rot, rect)
+    
+  ctr += 1
+  if ctr == 100:
+    with open('dump.txt', 'w') as f:
+      f.write(f'{fs.p}')
 
   pygame.display.flip()
   clock.tick(60)
