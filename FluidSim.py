@@ -3,7 +3,10 @@ import polyscope as ps
 from tqdm import tqdm
 from numba import jit
 import scipy as sp
-from scipy.sparse import coo_matrix
+from scipy.sparse import csr_matrix
+from scipy.sparse.linalg import cg
+from scipy.sparse.linalg import spilu
+from scipy.sparse.linalg import LinearOperator
 
 '''
 Dq/Dt = 0 (advection)
@@ -50,6 +53,50 @@ def bilerp(field, x, y, dx, dy, x_off=0.0, y_off=0.0):
           a * (1 - b) * v10 +
           (1 - a) * b * v01 +
           a * b * v11)
+
+@jit(nopython=True)
+def build_laplacian_triplets(N, dx, dy):
+  max_entries = N * N * 5  # max 5 entries per cell
+  row = np.zeros(max_entries, dtype=np.int32)
+  col = np.zeros(max_entries, dtype=np.int32)
+  data = np.zeros(max_entries)
+  
+  count = 0
+  for i in range(N):
+    for j in range(N):
+      idx = i * N + j
+      
+      row[count] = idx
+      col[count] = idx
+      data[count] = -2/dx**2 - 2/dy**2
+      count += 1
+      
+      if i > 0:
+          row[count] = idx
+          col[count] = (i-1)*N + j
+          data[count] = 1/dx**2
+          count += 1
+      if i < N-1:
+          row[count] = idx
+          col[count] = (i+1)*N + j
+          data[count] = 1/dx**2
+          count += 1
+      if j > 0:
+          row[count] = idx
+          col[count] = i*N + (j-1)
+          data[count] = 1/dy**2
+          count += 1
+      if j < N-1:
+          row[count] = idx
+          col[count] = i*N + (j+1)
+          data[count] = 1/dy**2
+          count += 1
+  
+  return row[:count], col[:count], data[:count]
+
+def build_laplacian_matrix(N, dx, dy):
+    row, col, data = build_laplacian_triplets(N, dx, dy)
+    return csr_matrix((data, (row, col)), shape=(N*N, N*N))
 
 
 @jit(nopython=True)
@@ -172,15 +219,15 @@ class FluidSim:
     v *= factor
 
   '''
-    the project(∆t, ~u) routine does the following:
+    the project(∆t, u) routine does the following:
     • Calculate the divergence d (the right-hand side) with modifications at solid wall boundaries.
     • Set the entries of A (stored in Adiag etc.).
     • Construct the MIC(0) preconditioner.
     • Solve Ap = d with MICCG(0), i.e. the PCG algorithm with MIC(0) as preconditioner.
-    • Compute the new velocities ~un+1 according to the pressure gradient update to ~u.
+    • Compute the new velocities u_(n+1) according to the pressure gradient update to u.
   '''
 
-  def project(self, q, q_prev):
+  def project(self):
     u = self.u
     v = self.v
     dx = self.dx
@@ -189,6 +236,24 @@ class FluidSim:
     N = self.N
 
     div = divergence(u, v, dx, dy)
+
+    if not hasattr(self, '_A_matrix'):
+      self._A_matrix = build_laplacian_matrix(N, dx, dy)
+      self._M = spilu(self._A_matrix)
+      self._M_op = LinearOperator(self._A_matrix.shape, self._M.solve)
+    
+    rhs = -div.flatten()
+    p_flat, info = cg(self._A_matrix, rhs, M=self._M_op, rtol=1e-6, maxiter=100)
+    p = p_flat.reshape((N, N))
+    
+    for i in range(1, N):
+      for j in range(N):
+        u[i, j] -= dt * (p[i, j] - p[i-1, j]) / dx
+
+    for i in range(N):
+      for j in range(1, N):
+        v[i, j] -= dt * (p[i, j] - p[i, j-1]) / dy    
+
 
   def boundary(self):
     N = self.N
