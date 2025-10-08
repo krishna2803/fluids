@@ -13,6 +13,12 @@ set(CMAKE_C_STANDARD 23)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+# ccache
+find_program(CCACHE_PROGRAM ccache)
+set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
+set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
+
+
 # options for deps
 set(FASTGLTF_COMPILE_AS_CPP20 ON)
 
@@ -33,8 +39,10 @@ find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 add_subdirectory(include/fastgltf)
 add_subdirectory(include/glfw)
 add_subdirectory(include/glm)
+add_subdirectory(include/quill)
 add_subdirectory(include/rapidobj)
 add_subdirectory(include/vk-bootstrap)
+add_subdirectory(include/volk)
 
 # header-only lib
 set(STB_INCLUDE_DIR ${CMAKE_SOURCE_DIR}/include/stb)
@@ -70,11 +78,30 @@ target_link_libraries(
     Vulkan::Vulkan
 )
 
+# sources
+file(GLOB_RECURSE PROJECT_SOURCES "src/*.cc")
+
 # main bin
-add_executable(${PROJECT_NAME} src/main.cpp)
+add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
 
 # config
+target_precompile_headers(
+    ${PROJECT_NAME}
+  PUBLIC 
+    <optional>
+    <vector>
+    <memory>
+    <string>
+    <vector>
+    <unordered_map>
+    <glm/mat4x4.hpp>
+    <glm/vec4.hpp>
+    <vulkan/vulkan.h>
+)
+
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
+
+set_target_properties(${PROJECT_NAME} PROPERTIES UNITY_BUILD ON)
 
 target_compile_options(
   ${PROJECT_NAME}
@@ -91,6 +118,7 @@ target_include_directories(
     ${PROJECT_NAME}
   PRIVATE
     ${CMAKE_SOURCE_DIR}/include
+    ${CMAKE_SOURCE_DIR}/src 
     ${STB_INCLUDE_DIR}
 )
 
@@ -102,10 +130,12 @@ target_link_libraries(
     fastgltf
     glfw
     glm
-    imgui
     GPUOpen::VulkanMemoryAllocator
+    imgui
+    quill::quill
     vk-bootstrap::vk-bootstrap
     Vulkan::Vulkan
+    volk
 )
 
 # ninja run / make run
