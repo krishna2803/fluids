@@ -16,3 +16,9 @@
 [submodule "include/imgui"]
 	path = include/imgui
 	url = https://github.com/ocornut/imgui.git
+[submodule "include/quill"]
+	path = include/quill
+	url = https://github.com/odygrd/quill.git
+[submodule "include/volk"]
+	path = include/volk
+	url = https://github.com/zeux/volk.git
