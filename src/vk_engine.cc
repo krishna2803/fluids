@@ -1,16 +1,18 @@
 #include <cassert>
 #include <chrono>
+#include <cstddef>
 #include <cstdlib>
 #include <memory>
 #include <thread>
+#include <vulkan/vulkan_core.h>
 
 #include "VkBootstrap.h"
 #include "logger.hh"
 #include "vk_engine.hh"
-#include "vk_initializers.hh"
+#include "vk_images.hh"
 #include "vk_types.hh"
 
-constexpr bool bUseValidationLayers = false;
+constexpr bool bUseValidationLayers = true;
 
 static std::unique_ptr<VulkanEngine> loaded_engine = nullptr;
 
@@ -59,12 +61,6 @@ auto VulkanEngine::init() -> void {
   is_initialized = true;
 }
 
-auto VulkanEngine::draw() -> void {
-  //
-  // placeholder
-  //
-}
-
 auto VulkanEngine::run() -> void {
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
@@ -83,14 +79,14 @@ auto VulkanEngine::run() -> void {
     }
 
     if (frame_count % 2000 == 0)
-      LOG_INFO_MSG("{}", frame_count);
+      LOG_INFO_MSG("Frame Count {}", frame_count);
 
     draw();
     frame_count++;
 
-    if (frame_count == 10000) {
-      glfwSetWindowShouldClose(window, true);
-    }
+    // if (frame_count == 10) {
+    //   glfwSetWindowShouldClose(window, true);
+    // }
   }
 }
 
@@ -117,13 +113,15 @@ auto VulkanEngine::init_vulkan() -> void {
     abort();
   }
 
-  VkPhysicalDeviceVulkan13Features features13;
+  VkPhysicalDeviceVulkan13Features features13{};
   features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
+  features13.pNext = nullptr;
   features13.dynamicRendering = true;
   features13.synchronization2 = true;
 
-  VkPhysicalDeviceVulkan12Features features12;
+  VkPhysicalDeviceVulkan12Features features12{};
   features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
+  features12.pNext = nullptr;
   features12.bufferDeviceAddress = true;
   features12.descriptorIndexing = true;
 
@@ -141,6 +139,10 @@ auto VulkanEngine::init_vulkan() -> void {
   device = vkb_dev.device;
   gpu = vkb_dev.physical_device;
 
+  graphics_queue = vkb_dev.get_queue(vkb::QueueType::graphics).value();
+  graphics_queue_family =
+      vkb_dev.get_queue_index(vkb::QueueType::graphics).value();
+
   LOG_INFO_MSG("Vulkan Initialized");
 }
 
@@ -154,7 +156,8 @@ auto VulkanEngine::create_swapchain(const u32 width, const u32 height) -> void {
               .format = swapchain_img_fmt,
               .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
           // use vsync present mode
-          .set_desired_present_mode(VK_PRESENT_MODE_FIFO_RELAXED_KHR)
+          .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+          .set_desired_min_image_count(2)
           .set_desired_extent(width, height)
           .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
           .build()
@@ -183,17 +186,180 @@ auto VulkanEngine::destroy_swapchain() -> void {
 
 auto VulkanEngine::init_commands() -> void {
   // placeholder
+  VkCommandPoolCreateInfo cmd_pool_info{};
+  cmd_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  cmd_pool_info.pNext = nullptr;
+  cmd_pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  cmd_pool_info.queueFamilyIndex = graphics_queue_family;
+
+  for (int i = 0; i < FRAME_OVERLAP; i++) {
+    VK_CHECK(vkCreateCommandPool(device, &cmd_pool_info, nullptr,
+                                 &frames[i].cmd_pool));
+    VkCommandBufferAllocateInfo cmd_alloc_info{};
+    cmd_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    cmd_alloc_info.pNext = nullptr;
+    cmd_alloc_info.commandPool = frames[i].cmd_pool;
+    cmd_alloc_info.commandBufferCount = 1;
+    cmd_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+
+    VK_CHECK(
+        vkAllocateCommandBuffers(device, &cmd_alloc_info, &frames[i].cmd_buf));
+  }
+
   LOG_INFO_MSG("Commands Initialized");
 }
 
 auto VulkanEngine::init_sync_structures() -> void {
-  // placeholder
+  // create syncronization structures
+  // one fence to control when the gpu has finished rendering the frame,
+  // and 2 semaphores to syncronize rendering with swapchain
+  // we want the fence to start signalled so we can wait on it on the first
+
+  VkFenceCreateInfo fence_create_info{};
+  fence_create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+  fence_create_info.pNext = nullptr;
+  fence_create_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+  VkSemaphoreCreateInfo semaphore_create_info{};
+  semaphore_create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+  semaphore_create_info.pNext = nullptr;
+  // info.flags = 0;
+
+  for (int i = 0; i < FRAME_OVERLAP; i++) {
+    VK_CHECK(vkCreateFence(device, &fence_create_info, nullptr,
+                           &frames[i].render_fence));
+
+    VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr,
+                               &frames[i].swapchain_semaphore));
+    VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr,
+                               &frames[i].render_semaphore));
+  }
+
   LOG_INFO_MSG("Sync Structures Initialized");
+}
+
+auto VulkanEngine::draw() -> void {
+  VK_CHECK(vkWaitForFences(device, 1, &get_current_frame().render_fence, true,
+                           1'000'000'000U /*ns*/));
+  VK_CHECK(vkResetFences(device, 1, &get_current_frame().render_fence));
+
+  u32 swapchain_image_idx;
+  VK_CHECK(vkAcquireNextImageKHR(device, swapchain, 1'000'000'000U /*ns*/,
+                                 get_current_frame().swapchain_semaphore,
+                                 nullptr, &swapchain_image_idx));
+
+  VkCommandBuffer cmd = get_current_frame().cmd_buf;
+  VK_CHECK(vkResetCommandBuffer(cmd, 0));
+
+  VkCommandBufferBeginInfo cmd_buf_beg_info{};
+  cmd_buf_beg_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  cmd_buf_beg_info.pNext = nullptr;
+  cmd_buf_beg_info.pInheritanceInfo = nullptr;
+  cmd_buf_beg_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+
+  VK_CHECK(vkBeginCommandBuffer(cmd, &cmd_buf_beg_info));
+
+  // make the swapchain image into writeable mode before rendering
+  vkutil::transition_image(cmd, swapchain_images[swapchain_image_idx],
+                           VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+
+  // make a clear-color from frame number. This will flash with a 120 frame
+  // period.
+  VkClearColorValue clear_value;
+  float flash = std::abs(std::sin(frame_number / 120.0f));
+  clear_value = {{0.0f, 0.0f, flash, 1.0f}};
+
+  VkImageSubresourceRange clear_range{};
+  clear_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  clear_range.baseMipLevel = 0;
+  clear_range.levelCount = VK_REMAINING_MIP_LEVELS;
+  clear_range.baseArrayLayer = 0;
+  clear_range.layerCount = VK_REMAINING_ARRAY_LAYERS;
+
+  // clear image
+  vkCmdClearColorImage(cmd, swapchain_images[swapchain_image_idx],
+                       VK_IMAGE_LAYOUT_GENERAL, &clear_value, 1, &clear_range);
+
+  // make the swapchain image into presentable mode
+  vkutil::transition_image(cmd, swapchain_images[swapchain_image_idx],
+                           VK_IMAGE_LAYOUT_GENERAL,
+                           VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+
+  // finalize the command buffer (we can no longer add commands, but it can now
+  // be executed)
+  VK_CHECK(vkEndCommandBuffer(cmd));
+
+  VkCommandBufferSubmitInfo cmd_buf_sub_info;
+  cmd_buf_sub_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
+  cmd_buf_sub_info.pNext = nullptr;
+  cmd_buf_sub_info.commandBuffer = cmd;
+  cmd_buf_sub_info.deviceMask = 0;
+
+  VkSemaphoreSubmitInfo wait_info{};
+  wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+  wait_info.pNext = nullptr;
+  wait_info.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR;
+  wait_info.semaphore = get_current_frame().swapchain_semaphore;
+  wait_info.deviceIndex = 0;
+  wait_info.value = 1;
+
+  VkSemaphoreSubmitInfo signal_info{};
+  signal_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
+  signal_info.pNext = nullptr;
+  signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
+  signal_info.semaphore = get_current_frame().render_semaphore;
+  signal_info.deviceIndex = 0;
+  signal_info.value = 1;
+
+  VkSubmitInfo2 sub_info = {};
+  sub_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
+  sub_info.pNext = nullptr;
+
+  sub_info.waitSemaphoreInfoCount = 1;
+  sub_info.pWaitSemaphoreInfos = &wait_info;
+
+  sub_info.signalSemaphoreInfoCount = 1;
+  sub_info.pSignalSemaphoreInfos = &signal_info;
+
+  sub_info.commandBufferInfoCount = 1;
+  sub_info.pCommandBufferInfos = &cmd_buf_sub_info;
+
+  // submit command buffer to the queue and execute it.
+  // render_fence will now block until the graphic commands finish execution
+  VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &sub_info,
+                          get_current_frame().render_fence));
+
+  VkPresentInfoKHR present_info = {};
+  present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+  present_info.pNext = nullptr;
+  present_info.pSwapchains = &swapchain;
+  present_info.swapchainCount = 1;
+
+  present_info.pWaitSemaphores = &get_current_frame().render_semaphore;
+  present_info.waitSemaphoreCount = 1;
+
+  present_info.pImageIndices = &swapchain_image_idx;
+  VK_CHECK(vkQueuePresentKHR(graphics_queue, &present_info));
+  frame_number++;
 }
 
 auto VulkanEngine::cleanup() -> void {
   LOG_DEBUG_MSG("Cleaning up");
   if (is_initialized) {
+
+    vkDeviceWaitIdle(device);
+
+    for (int i = 0; i < FRAME_OVERLAP; i++) {
+      vkDestroyCommandPool(device, frames[i].cmd_pool, nullptr);
+
+      vkDestroyFence(device, frames[i].render_fence, nullptr);
+      vkDestroySemaphore(device, frames[i].render_semaphore, nullptr);
+      vkDestroySemaphore(device, frames[i].swapchain_semaphore, nullptr);
+    }
+
+    // VkQueue-s also can’t be destroyed, as, like with the VkPhysicalDevice,
+    // they aren’t really created objects, more like a handle to something that
+    // already exists as part of the VkInstance.
 
     destroy_swapchain();
     LOG_DEBUG_MSG("Swapchain destroyed");
