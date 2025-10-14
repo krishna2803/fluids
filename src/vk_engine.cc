@@ -1,10 +1,6 @@
-#include <cassert>
 #include <chrono>
-#include <cstddef>
-#include <cstdlib>
 #include <memory>
 #include <thread>
-#include <vulkan/vulkan_core.h>
 
 #include "VkBootstrap.h"
 #include "logger.hh"
@@ -17,9 +13,9 @@ constexpr bool bUseValidationLayers = true;
 static std::unique_ptr<VulkanEngine> loaded_engine = nullptr;
 
 VulkanEngine &VulkanEngine::Get() {
-  if (!loaded_engine)
-    loaded_engine = std::unique_ptr<VulkanEngine>(new VulkanEngine());
-  return *loaded_engine;
+  return *(loaded_engine ? loaded_engine
+                         : (loaded_engine = std::unique_ptr<VulkanEngine>(
+                                new VulkanEngine())));
 }
 
 auto VulkanEngine::init() -> void {
@@ -143,7 +139,22 @@ auto VulkanEngine::init_vulkan() -> void {
   graphics_queue_family =
       vkb_dev.get_queue_index(vkb::QueueType::graphics).value();
 
+  VkPhysicalDeviceProperties device_properties;
+  vkGetPhysicalDeviceProperties(phys_dev, &device_properties);
+
+  LOG_INFO_MSG("VkPhysicalDeviceLimits::maxMemoryAllocationCount = {}",
+               device_properties.limits.maxMemoryAllocationCount);
+
   LOG_INFO_MSG("Vulkan Initialized");
+
+  VmaAllocatorCreateInfo vma_info{};
+  vma_info.physicalDevice = phys_dev;
+  vma_info.device = device;
+  vma_info.instance = instance;
+  vma_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+  vmaCreateAllocator(&vma_info, &vma);
+
+  dqueue.push_func([&]() { vmaDestroyAllocator(vma); });
 }
 
 auto VulkanEngine::create_swapchain(const u32 width, const u32 height) -> void {
@@ -174,6 +185,66 @@ auto VulkanEngine::init_swapchain() -> void {
   create_swapchain(window_extent.width, window_extent.height);
 
   LOG_INFO_MSG("Swapchain Initialized");
+
+  VkExtent3D draw_img_extent = {window_extent.width, window_extent.height, 1};
+
+  // hardcoding the draw format to 32 bit float
+  draw_img.img_fmt = VK_FORMAT_R16G16B16A16_SFLOAT;
+  draw_img.img_extent = draw_img_extent;
+
+  VkImageUsageFlags draw_img_use_flags{};
+  draw_img_use_flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+  draw_img_use_flags |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+  draw_img_use_flags |= VK_IMAGE_USAGE_STORAGE_BIT;
+  draw_img_use_flags |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+
+  VkImageCreateInfo rimg_info{};
+  rimg_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  rimg_info.pNext = nullptr;
+
+  rimg_info.imageType = VK_IMAGE_TYPE_2D;
+  rimg_info.format = draw_img.img_fmt;
+  rimg_info.extent = draw_img_extent;
+  rimg_info.mipLevels = 1;
+  rimg_info.arrayLayers = 1;
+
+  // for MSAA. we will not be using it by default, so default it to 1 sample per
+  // pixel.
+  rimg_info.samples = VK_SAMPLE_COUNT_1_BIT;
+
+  // optimal tiling, which means the image is stored on the best gpu format
+  rimg_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+  rimg_info.usage = draw_img_use_flags;
+
+  // for the draw image, we want to allocate it from gpu local memory
+  VmaAllocationCreateInfo rimg_allocinfo = {};
+  rimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+  rimg_allocinfo.requiredFlags =
+      VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+
+  VK_CHECK(vmaCreateImage(vma, &rimg_info, &rimg_allocinfo, &draw_img.img,
+                          &draw_img.allocation, nullptr));
+
+  // build a image-view for the draw image to use for rendering
+  VkImageViewCreateInfo rview_info{};
+  rview_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  rview_info.pNext = nullptr;
+
+  rview_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  rview_info.image = draw_img.img;
+  rview_info.format = draw_img.img_fmt;
+  rview_info.subresourceRange.baseMipLevel = 0;
+  rview_info.subresourceRange.levelCount = 1;
+  rview_info.subresourceRange.baseArrayLayer = 0;
+  rview_info.subresourceRange.layerCount = 1;
+  rview_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+
+  VK_CHECK(vkCreateImageView(device, &rview_info, nullptr, &draw_img.img_view));
+
+  dqueue.push_func([=, this]() {
+    vkDestroyImageView(device, draw_img.img_view, nullptr);
+    vmaDestroyImage(vma, draw_img.img, draw_img.allocation);
+  });
 }
 
 auto VulkanEngine::destroy_swapchain() -> void {
@@ -238,9 +309,31 @@ auto VulkanEngine::init_sync_structures() -> void {
   LOG_INFO_MSG("Sync Structures Initialized");
 }
 
+auto VulkanEngine::draw_background(VkCommandBuffer cmd) -> void {
+  // make a clear-color from frame number. This will flash with a 120 frame
+  // period.
+  VkClearColorValue clear_value;
+  float flash = (1.0f + std::sin(frame_number / 120.0f)) * 0.5f;
+  clear_value = {{flash, 0.0f, 0.0f, 1.0f}};
+
+  VkImageSubresourceRange clear_range{};
+  clear_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  clear_range.baseMipLevel = 0;
+  clear_range.levelCount = VK_REMAINING_MIP_LEVELS;
+  clear_range.baseArrayLayer = 0;
+  clear_range.layerCount = VK_REMAINING_ARRAY_LAYERS;
+
+  // clear image
+  vkCmdClearColorImage(cmd, draw_img.img, VK_IMAGE_LAYOUT_GENERAL, &clear_value,
+                       1, &clear_range);
+}
+
 auto VulkanEngine::draw() -> void {
   VK_CHECK(vkWaitForFences(device, 1, &get_current_frame().render_fence, true,
                            1'000'000'000U /*ns*/));
+
+  get_current_frame().dqueue.flush();
+
   VK_CHECK(vkResetFences(device, 1, &get_current_frame().render_fence));
 
   u32 swapchain_image_idx;
@@ -257,36 +350,38 @@ auto VulkanEngine::draw() -> void {
   cmd_buf_beg_info.pInheritanceInfo = nullptr;
   cmd_buf_beg_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
 
+  draw_extent.width = window_extent.width;
+  draw_extent.height = window_extent.height;
+
   VK_CHECK(vkBeginCommandBuffer(cmd, &cmd_buf_beg_info));
 
-  // make the swapchain image into writeable mode before rendering
+  // transition our main draw image into general layout so we can write into it
+  // we will overwrite it all so we dont care about what was the older layout
+  vkutil::transition_image(cmd, draw_img.img, VK_IMAGE_LAYOUT_UNDEFINED,
+                           VK_IMAGE_LAYOUT_GENERAL);
+
+  draw_background(cmd);
+
+  // transition the draw image and the swapchain image into their correct
+  // transfer layouts
+  vkutil::transition_image(cmd, draw_img.img, VK_IMAGE_LAYOUT_GENERAL,
+                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
   vkutil::transition_image(cmd, swapchain_images[swapchain_image_idx],
-                           VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+                           VK_IMAGE_LAYOUT_UNDEFINED,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
 
-  // make a clear-color from frame number. This will flash with a 120 frame
-  // period.
-  VkClearColorValue clear_value;
-  float flash = std::abs(std::sin(frame_number / 120.0f));
-  clear_value = {{0.0f, 0.0f, flash, 1.0f}};
+  // execute a copy from the draw image into the swapchain
+  vkutil::copy_image_to_image(cmd, draw_img.img,
+                              swapchain_images[swapchain_image_idx],
+                              draw_extent, swapchain_extent);
 
-  VkImageSubresourceRange clear_range{};
-  clear_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  clear_range.baseMipLevel = 0;
-  clear_range.levelCount = VK_REMAINING_MIP_LEVELS;
-  clear_range.baseArrayLayer = 0;
-  clear_range.layerCount = VK_REMAINING_ARRAY_LAYERS;
-
-  // clear image
-  vkCmdClearColorImage(cmd, swapchain_images[swapchain_image_idx],
-                       VK_IMAGE_LAYOUT_GENERAL, &clear_value, 1, &clear_range);
-
-  // make the swapchain image into presentable mode
+  // set swapchain image layout to Present so we can show it on the screen
   vkutil::transition_image(cmd, swapchain_images[swapchain_image_idx],
-                           VK_IMAGE_LAYOUT_GENERAL,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
                            VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
 
-  // finalize the command buffer (we can no longer add commands, but it can now
-  // be executed)
+  // finalize the command buffer (we can no longer add commands, but it can
+  // now be executed)
   VK_CHECK(vkEndCommandBuffer(cmd));
 
   VkCommandBufferSubmitInfo cmd_buf_sub_info;
@@ -345,41 +440,47 @@ auto VulkanEngine::draw() -> void {
 
 auto VulkanEngine::cleanup() -> void {
   LOG_DEBUG_MSG("Cleaning up");
-  if (is_initialized) {
-
-    vkDeviceWaitIdle(device);
-
-    for (int i = 0; i < FRAME_OVERLAP; i++) {
-      vkDestroyCommandPool(device, frames[i].cmd_pool, nullptr);
-
-      vkDestroyFence(device, frames[i].render_fence, nullptr);
-      vkDestroySemaphore(device, frames[i].render_semaphore, nullptr);
-      vkDestroySemaphore(device, frames[i].swapchain_semaphore, nullptr);
-    }
-
-    // VkQueue-s also can’t be destroyed, as, like with the VkPhysicalDevice,
-    // they aren’t really created objects, more like a handle to something that
-    // already exists as part of the VkInstance.
-
-    destroy_swapchain();
-    LOG_DEBUG_MSG("Swapchain destroyed");
-
-    vkDestroySurfaceKHR(instance, surface, nullptr);
-    LOG_DEBUG_MSG("Surface destroyed");
-    vkDestroyDevice(device, nullptr);
-    LOG_DEBUG_MSG("Logical Device destroyed");
-
-    // VkPhysicalDevice can’t be destroyed, as it’s not a Vulkan resource
-    // per-se, it’s more like just a handle to a GPU in the system
-
-    vkb::destroy_debug_utils_messenger(instance, dbg_msngr);
-    LOG_DEBUG_MSG("Debug utils messenger destroyed");
-
-    vkDestroyInstance(instance, nullptr);
-    LOG_DEBUG_MSG("VkInstance destroyed");
-
-    glfwDestroyWindow(window);
-    LOG_DEBUG_MSG("GLFWWindow destroyed");
-    glfwTerminate();
+  if (!is_initialized) {
+    LOG_WARNING_MSG("::cleanup() called with uininitialised instance!");
+    return;
   }
+
+  vkDeviceWaitIdle(device);
+
+  for (int i = 0; i < FRAME_OVERLAP; i++) {
+    vkDestroyCommandPool(device, frames[i].cmd_pool, nullptr);
+
+    vkDestroyFence(device, frames[i].render_fence, nullptr);
+    vkDestroySemaphore(device, frames[i].render_semaphore, nullptr);
+    vkDestroySemaphore(device, frames[i].swapchain_semaphore, nullptr);
+
+    frames[i].dqueue.flush();
+  }
+
+  dqueue.flush();
+
+  // VkQueue-s also can’t be destroyed, as, like with the VkPhysicalDevice,
+  // they aren’t really created objects, more like a handle to something that
+  // already exists as part of the VkInstance.
+
+  destroy_swapchain();
+  LOG_DEBUG_MSG("Swapchain destroyed");
+
+  vkDestroySurfaceKHR(instance, surface, nullptr);
+  LOG_DEBUG_MSG("Surface destroyed");
+  vkDestroyDevice(device, nullptr);
+  LOG_DEBUG_MSG("Logical Device destroyed");
+
+  // VkPhysicalDevice can’t be destroyed, as it’s not a Vulkan resource
+  // per-se, it’s more like just a handle to a GPU in the system
+
+  vkb::destroy_debug_utils_messenger(instance, dbg_msngr);
+  LOG_DEBUG_MSG("Debug utils messenger destroyed");
+
+  vkDestroyInstance(instance, nullptr);
+  LOG_DEBUG_MSG("VkInstance destroyed");
+
+  glfwDestroyWindow(window);
+  LOG_DEBUG_MSG("GLFWWindow destroyed");
+  glfwTerminate();
 }
