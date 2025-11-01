@@ -56,7 +56,8 @@ find_package(Vulkan REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 
 # global compile options
-# add_compile_options(-march=native -mtune=native)
+# required if QUILL_X86ARCH is set
+add_compile_options(-march=native -mtune=native)
 
 # add subdirectories
 add_subdirectory(include/fastgltf)
