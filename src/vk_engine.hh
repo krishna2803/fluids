@@ -22,35 +22,35 @@ struct DelQueue {
   void push_func(std::function<void()> &&func) { deletors.emplace_back(func); }
 
   void flush() {
-    for (const auto &fn : std::views::reverse(deletors)) {
+    for (const auto &fn : std::views::reverse(deletors))
       fn();
-    }
     deletors.clear();
   }
 };
 
 struct FrameData {
-  VkCommandPool cmd_pool;
-  VkCommandBuffer cmd_buf;
-  VkSemaphore swapchain_semaphore;
-  VkSemaphore render_semaphore;
-  VkFence render_fence;
-  DelQueue dqueue;
+  vk::CommandPool cmd_pool;
+  vk::CommandBuffer cmd_buf;
+  vk::Semaphore swapchain_semaphore;
+  vk::Semaphore render_semaphore;
+  vk::Fence render_fence;
+  DelQueue del_queue;
 };
 
 struct AllocatedImage {
-  VkImage img;
-  VkImageView img_view;
-  VkExtent3D img_extent;
-  VkFormat img_fmt;
+  vk::Image img;
+  vk::ImageView img_view;
+  vk::Extent3D img_extent;
+  vk::Format img_fmt;
   VmaAllocation allocation;
 };
 
 struct VulkanEngine {
-  int frame_count = 0;
+  long frame_count = 0;
 
-  VkExtent2D window_extent{800, 600};
+  vk::Extent2D window_extent{800, 600};
 
+  // singleton
   static VulkanEngine &Get();
   VulkanEngine(const VulkanEngine &) = delete;
   VulkanEngine &operator=(const VulkanEngine &) = delete;
@@ -65,7 +65,7 @@ struct VulkanEngine {
 
   FrameData &get_current_frame() {
     return frames[frame_number % FRAME_OVERLAP];
-  };
+  }
 
 private:
   bool is_initialized = false;
@@ -73,27 +73,27 @@ private:
   VulkanEngine() = default;
   GLFWwindow *window;
 
-  VkInstance instance;
-  VkDebugUtilsMessengerEXT dbg_msngr;
-  VkPhysicalDevice gpu;
-  VkDevice device;
-  VkSurfaceKHR surface;
-  VkSwapchainKHR swapchain;
-  VkFormat swapchain_img_fmt;
-  std::vector<VkImage> swapchain_images;
-  std::vector<VkImageView> swapchain_image_views;
-  VkExtent2D swapchain_extent;
+  vk::Instance instance;
+  vk::DebugUtilsMessengerEXT dbg_msngr;
+  vk::PhysicalDevice gpu;
+  vk::Device device;
+  vk::SurfaceKHR surface;
+  vk::SwapchainKHR swapchain;
+  vk::Format swapchain_img_fmt;
+  std::vector<vk::Image> swapchain_images;
+  std::vector<vk::ImageView> swapchain_image_views;
+  vk::Extent2D swapchain_extent;
 
   AllocatedImage draw_img;
-  VkExtent2D draw_extent;
+  vk::Extent2D draw_extent;
 
-  VkQueue graphics_queue;
+  vk::Queue graphics_queue;
   u32 graphics_queue_family;
 
   u32 frame_number;
   FrameData frames[FRAME_OVERLAP];
 
-  DelQueue dqueue;
+  DelQueue del_queue;
   VmaAllocator vma;
 
   void init_vulkan();
@@ -101,6 +101,6 @@ private:
   void init_commands();
   void init_sync_structures();
   void create_swapchain(u32 width, u32 height);
-  void draw_background(VkCommandBuffer cmd);
+  void draw_background(vk::CommandBuffer cmd);
   void destroy_swapchain();
 };

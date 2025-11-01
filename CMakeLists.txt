@@ -33,7 +33,6 @@ set(GLM_ENABLE_CXX_20 ON)
 set(GLM_BUILD_TESTS OFF)
 set(GLM_ENABLE_LANG_EXTENSIONS ON)
 set(GLM_ENABLE_FAST_MATH ON)
-set(GLM_ENABLE_FAST_MATH ON) # optional
 
 # detect and enable best SIMD support
 include(CheckCXXCompilerFlag)
@@ -57,7 +56,7 @@ find_package(Vulkan REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 
 # global compile options
-add_compile_options(-march=native -mtune=native -O3 -ffast-math)
+# add_compile_options(-march=native -mtune=native)
 
 # add subdirectories
 add_subdirectory(include/fastgltf)
@@ -112,15 +111,15 @@ add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
 target_precompile_headers(
     ${PROJECT_NAME}
   PUBLIC 
-    <optional>
+    # <optional>
+    # <vector>
+    # <memory>
+    # <string>
     <vector>
-    <memory>
-    <string>
-    <vector>
-    <unordered_map>
-    <glm/mat4x4.hpp>
-    <glm/vec4.hpp>
-    <vulkan/vulkan.h>
+    # <unordered_map>
+    # <glm/mat4x4.hpp>
+    # <glm/vec4.hpp>
+    # <vulkan/vulkan.h>
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
@@ -133,8 +132,6 @@ target_compile_options(
     -Wall
     -Wextra
     -Werror
-    -march=native
-    -mtune=native
     # -O3
 )
 

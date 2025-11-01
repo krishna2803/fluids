@@ -1,12 +1,14 @@
 #include <chrono>
 #include <memory>
 #include <thread>
+#include <vulkan/vulkan_core.h>
 
 #include "VkBootstrap.h"
 #include "logger.hh"
 #include "vk_engine.hh"
 #include "vk_images.hh"
 #include "vk_types.hh"
+#include "vulkan/vulkan.hpp"
 
 constexpr bool bUseValidationLayers = true;
 
@@ -63,30 +65,27 @@ auto VulkanEngine::run() -> void {
 
     stop_rendering = glfwGetWindowAttrib(window, GLFW_ICONIFIED);
 
-    // Do not draw if we are minimized
+    // do not draw if we are minimized
     if (stop_rendering) {
-      // Throttle the speed to avoid endless spinning
+      // throttle the speed to avoid endless spinning
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
       continue;
     }
 
-    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS) {
+    if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
       glfwSetWindowShouldClose(window, true);
-    }
 
     if (frame_count % 2000 == 0)
       LOG_INFO_MSG("Frame Count {}", frame_count);
 
     draw();
     frame_count++;
-
-    // if (frame_count == 10) {
-    //   glfwSetWindowShouldClose(window, true);
-    // }
   }
 }
 
 auto VulkanEngine::init_vulkan() -> void {
+  LOG_DEBUG_MSG("Initializing Vulkan instance");
+
   vkb::InstanceBuilder builder;
   auto inst_ret = builder.set_app_name("Example Vulkan Application")
                       .request_validation_layers(bUseValidationLayers)
@@ -95,392 +94,384 @@ auto VulkanEngine::init_vulkan() -> void {
                       .build();
 
   vkb::Instance vkb_inst = inst_ret.value();
-  instance = vkb_inst.instance;
-  dbg_msngr = vkb_inst.debug_messenger;
+  instance = static_cast<vk::Instance>(vkb_inst.instance);
+  dbg_msngr = static_cast<vk::DebugUtilsMessengerEXT>(vkb_inst.debug_messenger);
 
-  surface = VK_NULL_HANDLE;
-  VkResult glfw_result =
-      glfwCreateWindowSurface(instance, window, nullptr, &surface);
+  LOG_DEBUG_MSG("Creating window surface");
+  VkSurfaceKHR c_surface;
+  VkResult glfw_result = glfwCreateWindowSurface(
+      static_cast<VkInstance>(instance), window, nullptr, &c_surface);
   if (glfw_result != VK_SUCCESS) {
-    LOG_ERROR_MSG("Failed to select create window surface. Error: {}",
+    LOG_ERROR_MSG("Failed to create window surface. GLFW Error: {}",
                   std::to_string(glfw_result));
     glfwDestroyWindow(window);
     glfwTerminate();
     abort();
   }
+  surface = vk::SurfaceKHR{c_surface};
+  LOG_DEBUG_MSG("Window surface created successfully");
 
-  VkPhysicalDeviceVulkan13Features features13{};
-  features13.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES;
-  features13.pNext = nullptr;
-  features13.dynamicRendering = true;
-  features13.synchronization2 = true;
+  vk::PhysicalDeviceVulkan13Features features13{};
+  features13.setSynchronization2(true);
+  features13.setDynamicRendering(true);
 
-  VkPhysicalDeviceVulkan12Features features12{};
-  features12.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES;
-  features12.pNext = nullptr;
-  features12.bufferDeviceAddress = true;
-  features12.descriptorIndexing = true;
+  vk::PhysicalDeviceVulkan12Features features12{};
+  features12.setDescriptorIndexing(true);
+  features12.setBufferDeviceAddress(true);
 
+  VkPhysicalDeviceVulkan13Features c_features13 =
+      static_cast<VkPhysicalDeviceVulkan13Features>(features13);
+  VkPhysicalDeviceVulkan12Features c_features12 =
+      static_cast<VkPhysicalDeviceVulkan12Features>(features12);
+
+  LOG_DEBUG_MSG("Selecting physical device");
   vkb::PhysicalDeviceSelector selector{vkb_inst};
-  vkb::PhysicalDevice phys_dev = selector.set_minimum_version(1, 4)
-                                     .set_required_features_13(features13)
-                                     .set_required_features_12(features12)
-                                     .set_surface(surface)
-                                     .select()
-                                     .value();
+  vkb::PhysicalDevice phys_dev =
+      selector.set_minimum_version(1, 4)
+          .set_required_features_13(c_features13)
+          .set_required_features_12(c_features12)
+          .set_surface(static_cast<VkSurfaceKHR>(surface))
+          .select()
+          .value();
 
+  LOG_DEBUG_MSG("Creating logical device");
   vkb::DeviceBuilder dev_builder{phys_dev};
   vkb::Device vkb_dev = dev_builder.build().value();
 
-  device = vkb_dev.device;
-  gpu = vkb_dev.physical_device;
+  device = static_cast<vk::Device>(vkb_dev.device);
+  gpu = static_cast<vk::PhysicalDevice>(vkb_dev.physical_device);
 
-  graphics_queue = vkb_dev.get_queue(vkb::QueueType::graphics).value();
+  graphics_queue = static_cast<vk::Queue>(
+      vkb_dev.get_queue(vkb::QueueType::graphics).value());
   graphics_queue_family =
       vkb_dev.get_queue_index(vkb::QueueType::graphics).value();
 
-  VkPhysicalDeviceProperties device_properties;
-  vkGetPhysicalDeviceProperties(phys_dev, &device_properties);
+  vk::PhysicalDeviceProperties device_properties = gpu.getProperties();
 
+  LOG_INFO_MSG("GPU: {}", device_properties.deviceName.data());
   LOG_INFO_MSG("VkPhysicalDeviceLimits::maxMemoryAllocationCount = {}",
                device_properties.limits.maxMemoryAllocationCount);
 
-  LOG_INFO_MSG("Vulkan Initialized");
+  LOG_INFO_MSG("Vulkan initialized successfully");
 
+  LOG_DEBUG_MSG("Creating VMA allocator");
   VmaAllocatorCreateInfo vma_info{};
-  vma_info.physicalDevice = phys_dev;
-  vma_info.device = device;
-  vma_info.instance = instance;
+  vma_info.physicalDevice = static_cast<VkPhysicalDevice>(gpu);
+  vma_info.device = static_cast<VkDevice>(device);
+  vma_info.instance = static_cast<VkInstance>(instance);
   vma_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
   vmaCreateAllocator(&vma_info, &vma);
 
-  dqueue.push_func([&]() { vmaDestroyAllocator(vma); });
+  del_queue.push_func([&]() { vmaDestroyAllocator(vma); });
+  LOG_DEBUG_MSG("VMA allocator created");
 }
 
 auto VulkanEngine::create_swapchain(const u32 width, const u32 height) -> void {
-  vkb::SwapchainBuilder builder{gpu, device, surface};
-  swapchain_img_fmt = VK_FORMAT_B8G8R8A8_UNORM;
+  LOG_DEBUG_MSG("Creating swapchain {}x{}", width, height);
+
+  vkb::SwapchainBuilder builder{static_cast<VkPhysicalDevice>(gpu),
+                                static_cast<VkDevice>(device),
+                                static_cast<VkSurfaceKHR>(surface)};
+  swapchain_img_fmt = vk::Format::eB8G8R8A8Unorm;
+
   vkb::Swapchain vkb_swapchain =
       builder
-          //.use_default_format_selection()
           .set_desired_format(VkSurfaceFormatKHR{
-              .format = swapchain_img_fmt,
-              .colorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR})
-          // use vsync present mode
-          .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+              .format = static_cast<VkFormat>(swapchain_img_fmt),
+              .colorSpace = static_cast<VkColorSpaceKHR>(
+                  vk::ColorSpaceKHR::eVkColorspaceSrgbNonlinear)})
+          .set_desired_present_mode(
+              static_cast<VkPresentModeKHR>(vk::PresentModeKHR::eFifo))
           .set_desired_min_image_count(2)
           .set_desired_extent(width, height)
-          .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+          .add_image_usage_flags(static_cast<VkImageUsageFlags>(
+              vk::ImageUsageFlagBits::eTransferDst))
           .build()
           .value();
 
-  swapchain_extent = vkb_swapchain.extent;
-  // store swapchain and its related images
-  swapchain = vkb_swapchain.swapchain;
-  swapchain_images = vkb_swapchain.get_images().value();
-  swapchain_image_views = vkb_swapchain.get_image_views().value();
+  swapchain_extent =
+      vk::Extent2D{vkb_swapchain.extent.width, vkb_swapchain.extent.height};
+  swapchain = static_cast<vk::SwapchainKHR>(vkb_swapchain.swapchain);
+
+  auto c_images = vkb_swapchain.get_images().value();
+  swapchain_images.clear();
+  swapchain_images.reserve(c_images.size());
+  for (auto img : c_images)
+    swapchain_images.push_back(static_cast<vk::Image>(img));
+
+  auto c_views = vkb_swapchain.get_image_views().value();
+  swapchain_image_views.clear();
+  swapchain_image_views.reserve(c_views.size());
+  for (auto view : c_views)
+    swapchain_image_views.push_back(static_cast<vk::ImageView>(view));
+
+  LOG_DEBUG_MSG("Swapchain created with {} images", swapchain_images.size());
 }
 
 auto VulkanEngine::init_swapchain() -> void {
   create_swapchain(window_extent.width, window_extent.height);
 
-  LOG_INFO_MSG("Swapchain Initialized");
+  LOG_INFO_MSG("Swapchain initialized");
 
-  VkExtent3D draw_img_extent = {window_extent.width, window_extent.height, 1};
+  vk::Extent3D draw_img_extent = {window_extent.width, window_extent.height, 1};
 
-  // hardcoding the draw format to 32 bit float
-  draw_img.img_fmt = VK_FORMAT_R16G16B16A16_SFLOAT;
+  draw_img.img_fmt = vk::Format::eR16G16B16A16Sfloat;
   draw_img.img_extent = draw_img_extent;
 
-  VkImageUsageFlags draw_img_use_flags{};
-  draw_img_use_flags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-  draw_img_use_flags |= VK_IMAGE_USAGE_TRANSFER_DST_BIT;
-  draw_img_use_flags |= VK_IMAGE_USAGE_STORAGE_BIT;
-  draw_img_use_flags |= VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+  vk::ImageUsageFlags draw_img_use_flags =
+      vk::ImageUsageFlagBits::eTransferSrc |
+      vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eStorage |
+      vk::ImageUsageFlagBits::eColorAttachment;
 
-  VkImageCreateInfo rimg_info{};
-  rimg_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-  rimg_info.pNext = nullptr;
+  vk::ImageCreateInfo rimg_info{};
+  rimg_info.setImageType(vk::ImageType::e2D);
+  rimg_info.setFormat(draw_img.img_fmt);
+  rimg_info.setExtent(draw_img_extent);
+  rimg_info.setMipLevels(1);
+  rimg_info.setArrayLayers(1);
+  rimg_info.setSamples(vk::SampleCountFlagBits::e1);
+  rimg_info.setTiling(vk::ImageTiling::eOptimal);
+  rimg_info.setUsage(draw_img_use_flags);
+  rimg_info.setSharingMode(vk::SharingMode::eExclusive);
+  rimg_info.setInitialLayout(vk::ImageLayout::eUndefined);
 
-  rimg_info.imageType = VK_IMAGE_TYPE_2D;
-  rimg_info.format = draw_img.img_fmt;
-  rimg_info.extent = draw_img_extent;
-  rimg_info.mipLevels = 1;
-  rimg_info.arrayLayers = 1;
-
-  // for MSAA. we will not be using it by default, so default it to 1 sample per
-  // pixel.
-  rimg_info.samples = VK_SAMPLE_COUNT_1_BIT;
-
-  // optimal tiling, which means the image is stored on the best gpu format
-  rimg_info.tiling = VK_IMAGE_TILING_OPTIMAL;
-  rimg_info.usage = draw_img_use_flags;
-
-  // for the draw image, we want to allocate it from gpu local memory
   VmaAllocationCreateInfo rimg_allocinfo = {};
   rimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-  rimg_allocinfo.requiredFlags =
-      VkMemoryPropertyFlags(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+  rimg_allocinfo.requiredFlags = static_cast<VkMemoryPropertyFlagBits>(
+      vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-  VK_CHECK(vmaCreateImage(vma, &rimg_info, &rimg_allocinfo, &draw_img.img,
-                          &draw_img.allocation, nullptr));
+  VkImageCreateInfo c_img_info = static_cast<VkImageCreateInfo>(rimg_info);
+  VkImage c_image;
+  VK_CHECK(static_cast<vk::Result>(
+      vmaCreateImage(vma, &c_img_info, &rimg_allocinfo, &c_image,
+                     &draw_img.allocation, nullptr)));
+  draw_img.img = static_cast<vk::Image>(c_image);
 
-  // build a image-view for the draw image to use for rendering
-  VkImageViewCreateInfo rview_info{};
-  rview_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-  rview_info.pNext = nullptr;
+  LOG_DEBUG_MSG("Draw image created");
 
-  rview_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
-  rview_info.image = draw_img.img;
-  rview_info.format = draw_img.img_fmt;
-  rview_info.subresourceRange.baseMipLevel = 0;
-  rview_info.subresourceRange.levelCount = 1;
-  rview_info.subresourceRange.baseArrayLayer = 0;
-  rview_info.subresourceRange.layerCount = 1;
-  rview_info.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+  vk::ImageViewCreateInfo rview_info{};
+  rview_info.setImage(draw_img.img);
+  rview_info.setViewType(vk::ImageViewType::e2D);
+  rview_info.setFormat(draw_img.img_fmt);
 
-  VK_CHECK(vkCreateImageView(device, &rview_info, nullptr, &draw_img.img_view));
+  vk::ImageSubresourceRange subresource_range{};
+  subresource_range.setAspectMask(vk::ImageAspectFlagBits::eColor);
+  subresource_range.setBaseMipLevel(0);
+  subresource_range.setLevelCount(1);
+  subresource_range.setBaseArrayLayer(0);
+  subresource_range.setLayerCount(1);
+  rview_info.setSubresourceRange(subresource_range);
 
-  dqueue.push_func([=, this]() {
-    vkDestroyImageView(device, draw_img.img_view, nullptr);
-    vmaDestroyImage(vma, draw_img.img, draw_img.allocation);
+  draw_img.img_view = device.createImageView(rview_info);
+
+  LOG_DEBUG_MSG("Draw image view created");
+
+  del_queue.push_func([=, this]() {
+    device.destroyImageView(draw_img.img_view);
+    vmaDestroyImage(vma, static_cast<VkImage>(draw_img.img),
+                    draw_img.allocation);
   });
 }
 
 auto VulkanEngine::destroy_swapchain() -> void {
-  vkDestroySwapchainKHR(device, swapchain, nullptr);
+  LOG_DEBUG_MSG("Destroying swapchain");
+  device.destroySwapchainKHR(swapchain);
 
-  for (auto &img_view : swapchain_image_views) {
-    vkDestroyImageView(device, img_view, nullptr);
-  }
+  for (auto &img_view : swapchain_image_views)
+    device.destroyImageView(img_view);
+
+  LOG_DEBUG_MSG("Destroyed {} image views", swapchain_image_views.size());
 }
 
 auto VulkanEngine::init_commands() -> void {
-  // placeholder
-  VkCommandPoolCreateInfo cmd_pool_info{};
-  cmd_pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
-  cmd_pool_info.pNext = nullptr;
-  cmd_pool_info.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
-  cmd_pool_info.queueFamilyIndex = graphics_queue_family;
+  LOG_DEBUG_MSG("Initializing command structures");
+
+  vk::CommandPoolCreateInfo cmd_pool_info{};
+  cmd_pool_info.setFlags(vk::CommandPoolCreateFlagBits::eResetCommandBuffer);
+  cmd_pool_info.setQueueFamilyIndex(graphics_queue_family);
 
   for (int i = 0; i < FRAME_OVERLAP; i++) {
-    VK_CHECK(vkCreateCommandPool(device, &cmd_pool_info, nullptr,
-                                 &frames[i].cmd_pool));
-    VkCommandBufferAllocateInfo cmd_alloc_info{};
-    cmd_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    cmd_alloc_info.pNext = nullptr;
-    cmd_alloc_info.commandPool = frames[i].cmd_pool;
-    cmd_alloc_info.commandBufferCount = 1;
-    cmd_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    frames[i].cmd_pool = device.createCommandPool(cmd_pool_info);
 
-    VK_CHECK(
-        vkAllocateCommandBuffers(device, &cmd_alloc_info, &frames[i].cmd_buf));
+    vk::CommandBufferAllocateInfo cmd_alloc_info{};
+    cmd_alloc_info.setCommandPool(frames[i].cmd_pool);
+    cmd_alloc_info.setLevel(vk::CommandBufferLevel::ePrimary);
+    cmd_alloc_info.setCommandBufferCount(1);
+
+    auto buffers = device.allocateCommandBuffers(cmd_alloc_info);
+    frames[i].cmd_buf = buffers[0];
+
+    // LOG_TRACE("Created command pool and buffer for frame {}", i);
   }
 
-  LOG_INFO_MSG("Commands Initialized");
+  LOG_INFO_MSG("Commands initialized");
 }
 
 auto VulkanEngine::init_sync_structures() -> void {
-  // create syncronization structures
-  // one fence to control when the gpu has finished rendering the frame,
-  // and 2 semaphores to syncronize rendering with swapchain
-  // we want the fence to start signalled so we can wait on it on the first
+  LOG_DEBUG_MSG("Initializing synchronization structures");
 
-  VkFenceCreateInfo fence_create_info{};
-  fence_create_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-  fence_create_info.pNext = nullptr;
-  fence_create_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+  vk::FenceCreateInfo fence_create_info{};
+  fence_create_info.setFlags(vk::FenceCreateFlagBits::eSignaled);
 
-  VkSemaphoreCreateInfo semaphore_create_info{};
-  semaphore_create_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-  semaphore_create_info.pNext = nullptr;
-  // info.flags = 0;
+  vk::SemaphoreCreateInfo semaphore_create_info{};
 
   for (int i = 0; i < FRAME_OVERLAP; i++) {
-    VK_CHECK(vkCreateFence(device, &fence_create_info, nullptr,
-                           &frames[i].render_fence));
+    frames[i].render_fence = device.createFence(fence_create_info);
+    frames[i].swapchain_semaphore =
+        device.createSemaphore(semaphore_create_info);
+    frames[i].render_semaphore = device.createSemaphore(semaphore_create_info);
 
-    VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr,
-                               &frames[i].swapchain_semaphore));
-    VK_CHECK(vkCreateSemaphore(device, &semaphore_create_info, nullptr,
-                               &frames[i].render_semaphore));
+    // LOG_TRACE("Created sync structures for frame {}", i);
   }
 
-  LOG_INFO_MSG("Sync Structures Initialized");
+  LOG_INFO_MSG("Sync structures initialized");
 }
 
-auto VulkanEngine::draw_background(VkCommandBuffer cmd) -> void {
-  // make a clear-color from frame number. This will flash with a 120 frame
-  // period.
-  VkClearColorValue clear_value;
+auto VulkanEngine::draw_background(vk::CommandBuffer cmd) -> void {
   float flash = (1.0f + std::sin(frame_number / 120.0f)) * 0.5f;
-  clear_value = {{flash, 0.0f, 0.0f, 1.0f}};
 
-  VkImageSubresourceRange clear_range{};
-  clear_range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-  clear_range.baseMipLevel = 0;
-  clear_range.levelCount = VK_REMAINING_MIP_LEVELS;
-  clear_range.baseArrayLayer = 0;
-  clear_range.layerCount = VK_REMAINING_ARRAY_LAYERS;
+  vk::ClearColorValue clear_value{
+      std::array<float, 4>{flash, 0.0f, 0.0f, 1.0f}};
 
-  // clear image
-  vkCmdClearColorImage(cmd, draw_img.img, VK_IMAGE_LAYOUT_GENERAL, &clear_value,
-                       1, &clear_range);
+  vk::ImageSubresourceRange clear_range{};
+  clear_range.setAspectMask(vk::ImageAspectFlagBits::eColor);
+  clear_range.setBaseMipLevel(0);
+  clear_range.setLevelCount(vk::RemainingMipLevels);
+  clear_range.setBaseArrayLayer(0);
+  clear_range.setLayerCount(vk::RemainingArrayLayers);
+
+  cmd.clearColorImage(draw_img.img, vk::ImageLayout::eGeneral, clear_value,
+                      clear_range);
 }
 
 auto VulkanEngine::draw() -> void {
-  VK_CHECK(vkWaitForFences(device, 1, &get_current_frame().render_fence, true,
-                           1'000'000'000U /*ns*/));
+  // LOG_TRACE("Drawing frame {}", frame_number);
 
-  get_current_frame().dqueue.flush();
+  auto wait_result = device.waitForFences(get_current_frame().render_fence,
+                                          true, 1'000'000'000U);
+  VK_CHECK(wait_result);
 
-  VK_CHECK(vkResetFences(device, 1, &get_current_frame().render_fence));
+  get_current_frame().del_queue.flush();
 
-  u32 swapchain_image_idx;
-  VK_CHECK(vkAcquireNextImageKHR(device, swapchain, 1'000'000'000U /*ns*/,
-                                 get_current_frame().swapchain_semaphore,
-                                 nullptr, &swapchain_image_idx));
+  device.resetFences(get_current_frame().render_fence);
 
-  VkCommandBuffer cmd = get_current_frame().cmd_buf;
-  VK_CHECK(vkResetCommandBuffer(cmd, 0));
+  auto [result, swapchain_image_idx] = device.acquireNextImageKHR(
+      swapchain, 1'000'000'000U, get_current_frame().swapchain_semaphore);
+  VK_CHECK(result);
 
-  VkCommandBufferBeginInfo cmd_buf_beg_info{};
-  cmd_buf_beg_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-  cmd_buf_beg_info.pNext = nullptr;
-  cmd_buf_beg_info.pInheritanceInfo = nullptr;
-  cmd_buf_beg_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  // LOG_TRACE("Acquired swapchain image {}", swapchain_image_idx);
+
+  vk::CommandBuffer cmd = get_current_frame().cmd_buf;
+  cmd.reset();
+
+  vk::CommandBufferBeginInfo cmd_buf_beg_info{};
+  cmd_buf_beg_info.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
 
   draw_extent.width = window_extent.width;
   draw_extent.height = window_extent.height;
 
-  VK_CHECK(vkBeginCommandBuffer(cmd, &cmd_buf_beg_info));
+  cmd.begin(cmd_buf_beg_info);
 
-  // transition our main draw image into general layout so we can write into it
-  // we will overwrite it all so we dont care about what was the older layout
-  vkutil::transition_image(cmd, draw_img.img, VK_IMAGE_LAYOUT_UNDEFINED,
-                           VK_IMAGE_LAYOUT_GENERAL);
+  vkutil::transition_image(cmd, draw_img.img, vk::ImageLayout::eUndefined,
+                           vk::ImageLayout::eGeneral);
 
   draw_background(cmd);
 
-  // transition the draw image and the swapchain image into their correct
-  // transfer layouts
-  vkutil::transition_image(cmd, draw_img.img, VK_IMAGE_LAYOUT_GENERAL,
-                           VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+  vkutil::transition_image(cmd, draw_img.img, vk::ImageLayout::eGeneral,
+                           vk::ImageLayout::eTransferSrcOptimal);
   vkutil::transition_image(cmd, swapchain_images[swapchain_image_idx],
-                           VK_IMAGE_LAYOUT_UNDEFINED,
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+                           vk::ImageLayout::eUndefined,
+                           vk::ImageLayout::eTransferDstOptimal);
 
-  // execute a copy from the draw image into the swapchain
   vkutil::copy_image_to_image(cmd, draw_img.img,
                               swapchain_images[swapchain_image_idx],
                               draw_extent, swapchain_extent);
 
-  // set swapchain image layout to Present so we can show it on the screen
   vkutil::transition_image(cmd, swapchain_images[swapchain_image_idx],
-                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                           VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                           vk::ImageLayout::eTransferDstOptimal,
+                           vk::ImageLayout::ePresentSrcKHR);
 
-  // finalize the command buffer (we can no longer add commands, but it can
-  // now be executed)
-  VK_CHECK(vkEndCommandBuffer(cmd));
+  cmd.end();
 
-  VkCommandBufferSubmitInfo cmd_buf_sub_info;
-  cmd_buf_sub_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_SUBMIT_INFO;
-  cmd_buf_sub_info.pNext = nullptr;
-  cmd_buf_sub_info.commandBuffer = cmd;
-  cmd_buf_sub_info.deviceMask = 0;
+  vk::CommandBufferSubmitInfo cmd_buf_sub_info{};
+  cmd_buf_sub_info.setCommandBuffer(cmd);
+  cmd_buf_sub_info.setDeviceMask(0);
 
-  VkSemaphoreSubmitInfo wait_info{};
-  wait_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-  wait_info.pNext = nullptr;
-  wait_info.stageMask = VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT_KHR;
-  wait_info.semaphore = get_current_frame().swapchain_semaphore;
-  wait_info.deviceIndex = 0;
-  wait_info.value = 1;
+  vk::SemaphoreSubmitInfo wait_info{};
+  wait_info.setSemaphore(get_current_frame().swapchain_semaphore);
+  wait_info.setValue(1);
+  wait_info.setStageMask(vk::PipelineStageFlagBits2::eColorAttachmentOutput);
+  wait_info.setDeviceIndex(0);
 
-  VkSemaphoreSubmitInfo signal_info{};
-  signal_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_SUBMIT_INFO;
-  signal_info.pNext = nullptr;
-  signal_info.stageMask = VK_PIPELINE_STAGE_2_ALL_GRAPHICS_BIT;
-  signal_info.semaphore = get_current_frame().render_semaphore;
-  signal_info.deviceIndex = 0;
-  signal_info.value = 1;
+  vk::SemaphoreSubmitInfo signal_info{};
+  signal_info.setSemaphore(get_current_frame().render_semaphore);
+  signal_info.setValue(1);
+  signal_info.setStageMask(vk::PipelineStageFlagBits2::eAllGraphics);
+  signal_info.setDeviceIndex(0);
 
-  VkSubmitInfo2 sub_info = {};
-  sub_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO_2;
-  sub_info.pNext = nullptr;
+  vk::SubmitInfo2 sub_info{};
+  sub_info.setWaitSemaphoreInfoCount(1);
+  sub_info.setPWaitSemaphoreInfos(&wait_info);
+  sub_info.setCommandBufferInfoCount(1);
+  sub_info.setPCommandBufferInfos(&cmd_buf_sub_info);
+  sub_info.setSignalSemaphoreInfoCount(1);
+  sub_info.setPSignalSemaphoreInfos(&signal_info);
 
-  sub_info.waitSemaphoreInfoCount = 1;
-  sub_info.pWaitSemaphoreInfos = &wait_info;
+  graphics_queue.submit2(sub_info, get_current_frame().render_fence);
 
-  sub_info.signalSemaphoreInfoCount = 1;
-  sub_info.pSignalSemaphoreInfos = &signal_info;
+  vk::PresentInfoKHR present_info{};
+  present_info.setWaitSemaphoreCount(1);
+  present_info.setPWaitSemaphores(&get_current_frame().render_semaphore);
+  present_info.setSwapchainCount(1);
+  present_info.setPSwapchains(&swapchain);
+  present_info.setPImageIndices(&swapchain_image_idx);
 
-  sub_info.commandBufferInfoCount = 1;
-  sub_info.pCommandBufferInfos = &cmd_buf_sub_info;
+  VK_CHECK(graphics_queue.presentKHR(present_info));
 
-  // submit command buffer to the queue and execute it.
-  // render_fence will now block until the graphic commands finish execution
-  VK_CHECK(vkQueueSubmit2(graphics_queue, 1, &sub_info,
-                          get_current_frame().render_fence));
-
-  VkPresentInfoKHR present_info = {};
-  present_info.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
-  present_info.pNext = nullptr;
-  present_info.pSwapchains = &swapchain;
-  present_info.swapchainCount = 1;
-
-  present_info.pWaitSemaphores = &get_current_frame().render_semaphore;
-  present_info.waitSemaphoreCount = 1;
-
-  present_info.pImageIndices = &swapchain_image_idx;
-  VK_CHECK(vkQueuePresentKHR(graphics_queue, &present_info));
   frame_number++;
 }
 
 auto VulkanEngine::cleanup() -> void {
-  LOG_DEBUG_MSG("Cleaning up");
+  LOG_INFO_MSG("Cleaning up Vulkan Engine");
   if (!is_initialized) {
-    LOG_WARNING_MSG("::cleanup() called with uininitialised instance!");
+    LOG_WARNING_MSG("::cleanup() called with uninitialized instance!");
     return;
   }
 
-  vkDeviceWaitIdle(device);
+  device.waitIdle();
 
   for (int i = 0; i < FRAME_OVERLAP; i++) {
-    vkDestroyCommandPool(device, frames[i].cmd_pool, nullptr);
+    device.destroyCommandPool(frames[i].cmd_pool);
+    device.destroyFence(frames[i].render_fence);
+    device.destroySemaphore(frames[i].render_semaphore);
+    device.destroySemaphore(frames[i].swapchain_semaphore);
 
-    vkDestroyFence(device, frames[i].render_fence, nullptr);
-    vkDestroySemaphore(device, frames[i].render_semaphore, nullptr);
-    vkDestroySemaphore(device, frames[i].swapchain_semaphore, nullptr);
-
-    frames[i].dqueue.flush();
+    frames[i].del_queue.flush();
   }
+  LOG_DEBUG_MSG("Frame resources destroyed");
 
-  dqueue.flush();
-
-  // VkQueue-s also can’t be destroyed, as, like with the VkPhysicalDevice,
-  // they aren’t really created objects, more like a handle to something that
-  // already exists as part of the VkInstance.
+  del_queue.flush();
 
   destroy_swapchain();
   LOG_DEBUG_MSG("Swapchain destroyed");
 
-  vkDestroySurfaceKHR(instance, surface, nullptr);
+  instance.destroySurfaceKHR(surface);
   LOG_DEBUG_MSG("Surface destroyed");
-  vkDestroyDevice(device, nullptr);
-  LOG_DEBUG_MSG("Logical Device destroyed");
 
-  // VkPhysicalDevice can’t be destroyed, as it’s not a Vulkan resource
-  // per-se, it’s more like just a handle to a GPU in the system
+  device.destroy();
+  LOG_DEBUG_MSG("Logical device destroyed");
 
-  vkb::destroy_debug_utils_messenger(instance, dbg_msngr);
+  vkb::destroy_debug_utils_messenger(
+      static_cast<VkInstance>(instance),
+      static_cast<VkDebugUtilsMessengerEXT>(dbg_msngr));
   LOG_DEBUG_MSG("Debug utils messenger destroyed");
 
-  vkDestroyInstance(instance, nullptr);
+  instance.destroy();
   LOG_DEBUG_MSG("VkInstance destroyed");
 
   glfwDestroyWindow(window);
   LOG_DEBUG_MSG("GLFWWindow destroyed");
   glfwTerminate();
+
+  LOG_INFO_MSG("Vulkan Engine cleaned up successfully");
 }

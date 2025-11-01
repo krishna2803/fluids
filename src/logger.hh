@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory>
 #include <quill/Backend.h>
 #include <quill/Frontend.h>
 #include <quill/LogMacros.h>
