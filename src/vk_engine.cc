@@ -1,10 +1,8 @@
-#include <chrono>
 #include <memory>
-#include <thread>
-#include <vulkan/vulkan_core.h>
 
 #include "VkBootstrap.h"
 #include "logger.hh"
+#include "vk_descriptors.hh"
 #include "vk_engine.hh"
 #include "vk_images.hh"
 #include "vk_types.hh"
@@ -55,6 +53,7 @@ auto VulkanEngine::init() -> void {
   init_swapchain();
   init_commands();
   init_sync_structures();
+  init_descriptors();
 
   is_initialized = true;
 }
@@ -324,6 +323,39 @@ auto VulkanEngine::init_sync_structures() -> void {
   }
 
   LOG_INFO_MSG("Sync structures initialized");
+}
+
+auto VulkanEngine::init_descriptors() -> void {
+  LOG_DEBUG_MSG("Initializing descriptor sets");
+
+  std::vector<DescriptorAllocator::PoolSizeRatio> sizes = {
+      {vk::DescriptorType::eStorageImage, 1.0f}};
+
+  global_desc_allocator.init_pool(device, 10, sizes);
+  DescriptorLayoutBuilder buider;
+  buider.add_binding(0, vk::DescriptorType::eStorageImage);
+  draw_img_desc_set_layout =
+      buider.build(device, vk::ShaderStageFlagBits::eCompute);
+
+  draw_img_descriptors =
+      global_desc_allocator.allocate(device, draw_img_desc_set_layout);
+  vk::DescriptorImageInfo img_info{};
+  img_info.setImageLayout(vk::ImageLayout::eGeneral);
+  img_info.setImageView(draw_img.img_view);
+
+  vk::WriteDescriptorSet draw_img_write{};
+  draw_img_write.setDstBinding(0);
+  draw_img_write.setDstSet(draw_img_descriptors);
+  draw_img_write.setDescriptorCount(1);
+  draw_img_write.setDescriptorType(vk::DescriptorType::eStorageImage);
+  draw_img_write.setPImageInfo(&img_info);
+
+  device.updateDescriptorSets(1, &draw_img_write, 0, nullptr);
+
+  del_queue.push_func([&] {
+    global_desc_allocator.destroy_pool(device);
+    device.destroyDescriptorSetLayout(draw_img_desc_set_layout);
+  });
 }
 
 auto VulkanEngine::draw_background(vk::CommandBuffer cmd) -> void {

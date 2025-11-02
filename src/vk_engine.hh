@@ -1,7 +1,9 @@
 #pragma once
 
+#include "vk_descriptors.hh"
 #include "vk_mem_alloc.h"
 #include "vk_types.hh"
+#include "vulkan/vulkan.hpp"
 
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
@@ -96,10 +98,15 @@ private:
   DelQueue del_queue;
   VmaAllocator vma;
 
+  DescriptorAllocator global_desc_allocator;
+  vk::DescriptorSet draw_img_descriptors;
+  vk::DescriptorSetLayout draw_img_desc_set_layout;
+
   void init_vulkan();
   void init_swapchain();
   void init_commands();
   void init_sync_structures();
+  void init_descriptors();
   void create_swapchain(u32 width, u32 height);
   void draw_background(vk::CommandBuffer cmd);
   void destroy_swapchain();
