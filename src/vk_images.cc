@@ -1,5 +1,4 @@
 #include "vk_images.hh"
-#include "logger.hh"
 
 namespace vkutil {
 
@@ -69,17 +68,17 @@ auto copy_image_to_image(vk::CommandBuffer cmd, vk::Image src, vk::Image dst,
   std::array<vk::Offset3D, 2> src_offsets = {
       vk::Offset3D{}, // (0,0,0)
       vk::Offset3D{
-          static_cast<int32_t>(src_sz.width),  // x
-          static_cast<int32_t>(src_sz.height), // y
-          1                                    // z
+          static_cast<int>(src_sz.width),  // x
+          static_cast<int>(src_sz.height), // y
+          1                                // z
       }};
 
   std::array<vk::Offset3D, 2> dst_offsets = {
       vk::Offset3D{}, // (0,0,0)
       vk::Offset3D{
-          static_cast<int32_t>(dst_sz.width),  // x
-          static_cast<int32_t>(dst_sz.height), // y
-          1                                    // z
+          static_cast<int>(dst_sz.width),  // x
+          static_cast<int>(dst_sz.height), // y
+          1                                // z
       }};
 
   blit_region.setSrcOffsets(src_offsets);

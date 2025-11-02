@@ -66,11 +66,11 @@ auto VulkanEngine::run() -> void {
     stop_rendering = glfwGetWindowAttrib(window, GLFW_ICONIFIED);
 
     // do not draw if we are minimized
-    if (stop_rendering) {
-      // throttle the speed to avoid endless spinning
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      continue;
-    }
+    // if (stop_rendering) {
+    //   // throttle the speed to avoid endless spinning
+    //   std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    //   continue;
+    // }
 
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
       glfwSetWindowShouldClose(window, true);
@@ -94,13 +94,14 @@ auto VulkanEngine::init_vulkan() -> void {
                       .build();
 
   vkb::Instance vkb_inst = inst_ret.value();
-  instance = static_cast<vk::Instance>(vkb_inst.instance);
-  dbg_msngr = static_cast<vk::DebugUtilsMessengerEXT>(vkb_inst.debug_messenger);
+  instance = implicit_cast<vk::Instance>(vkb_inst.instance);
+  dbg_msngr =
+      implicit_cast<vk::DebugUtilsMessengerEXT>(vkb_inst.debug_messenger);
 
   LOG_DEBUG_MSG("Creating window surface");
   VkSurfaceKHR c_surface;
   VkResult glfw_result = glfwCreateWindowSurface(
-      static_cast<VkInstance>(instance), window, nullptr, &c_surface);
+      implicit_cast<VkInstance>(instance), window, nullptr, &c_surface);
   if (glfw_result != VK_SUCCESS) {
     LOG_ERROR_MSG("Failed to create window surface. GLFW Error: {}",
                   std::to_string(glfw_result));
@@ -120,9 +121,9 @@ auto VulkanEngine::init_vulkan() -> void {
   features12.setBufferDeviceAddress(true);
 
   VkPhysicalDeviceVulkan13Features c_features13 =
-      static_cast<VkPhysicalDeviceVulkan13Features>(features13);
+      implicit_cast<VkPhysicalDeviceVulkan13Features>(features13);
   VkPhysicalDeviceVulkan12Features c_features12 =
-      static_cast<VkPhysicalDeviceVulkan12Features>(features12);
+      implicit_cast<VkPhysicalDeviceVulkan12Features>(features12);
 
   LOG_DEBUG_MSG("Selecting physical device");
   vkb::PhysicalDeviceSelector selector{vkb_inst};
@@ -130,7 +131,7 @@ auto VulkanEngine::init_vulkan() -> void {
       selector.set_minimum_version(1, 4)
           .set_required_features_13(c_features13)
           .set_required_features_12(c_features12)
-          .set_surface(static_cast<VkSurfaceKHR>(surface))
+          .set_surface(implicit_cast<VkSurfaceKHR>(surface))
           .select()
           .value();
 
@@ -138,10 +139,10 @@ auto VulkanEngine::init_vulkan() -> void {
   vkb::DeviceBuilder dev_builder{phys_dev};
   vkb::Device vkb_dev = dev_builder.build().value();
 
-  device = static_cast<vk::Device>(vkb_dev.device);
+  device = implicit_cast<vk::Device>(vkb_dev.device);
   gpu = static_cast<vk::PhysicalDevice>(vkb_dev.physical_device);
 
-  graphics_queue = static_cast<vk::Queue>(
+  graphics_queue = implicit_cast<vk::Queue>(
       vkb_dev.get_queue(vkb::QueueType::graphics).value());
   graphics_queue_family =
       vkb_dev.get_queue_index(vkb::QueueType::graphics).value();
@@ -149,16 +150,14 @@ auto VulkanEngine::init_vulkan() -> void {
   vk::PhysicalDeviceProperties device_properties = gpu.getProperties();
 
   LOG_INFO_MSG("GPU: {}", device_properties.deviceName.data());
-  LOG_INFO_MSG("VkPhysicalDeviceLimits::maxMemoryAllocationCount = {}",
-               device_properties.limits.maxMemoryAllocationCount);
 
   LOG_INFO_MSG("Vulkan initialized successfully");
 
   LOG_DEBUG_MSG("Creating VMA allocator");
   VmaAllocatorCreateInfo vma_info{};
-  vma_info.physicalDevice = static_cast<VkPhysicalDevice>(gpu);
-  vma_info.device = static_cast<VkDevice>(device);
-  vma_info.instance = static_cast<VkInstance>(instance);
+  vma_info.physicalDevice = implicit_cast<VkPhysicalDevice>(gpu);
+  vma_info.device = implicit_cast<VkDevice>(device);
+  vma_info.instance = implicit_cast<VkInstance>(instance);
   vma_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
   vmaCreateAllocator(&vma_info, &vma);
 
@@ -169,9 +168,9 @@ auto VulkanEngine::init_vulkan() -> void {
 auto VulkanEngine::create_swapchain(const u32 width, const u32 height) -> void {
   LOG_DEBUG_MSG("Creating swapchain {}x{}", width, height);
 
-  vkb::SwapchainBuilder builder{static_cast<VkPhysicalDevice>(gpu),
-                                static_cast<VkDevice>(device),
-                                static_cast<VkSurfaceKHR>(surface)};
+  vkb::SwapchainBuilder builder{implicit_cast<VkPhysicalDevice>(gpu),
+                                implicit_cast<VkDevice>(device),
+                                implicit_cast<VkSurfaceKHR>(surface)};
   swapchain_img_fmt = vk::Format::eB8G8R8A8Unorm;
 
   vkb::Swapchain vkb_swapchain =
@@ -191,19 +190,19 @@ auto VulkanEngine::create_swapchain(const u32 width, const u32 height) -> void {
 
   swapchain_extent =
       vk::Extent2D{vkb_swapchain.extent.width, vkb_swapchain.extent.height};
-  swapchain = static_cast<vk::SwapchainKHR>(vkb_swapchain.swapchain);
+  swapchain = implicit_cast<vk::SwapchainKHR>(vkb_swapchain.swapchain);
 
   auto c_images = vkb_swapchain.get_images().value();
   swapchain_images.clear();
   swapchain_images.reserve(c_images.size());
   for (auto img : c_images)
-    swapchain_images.push_back(static_cast<vk::Image>(img));
+    swapchain_images.push_back(implicit_cast<vk::Image>(img));
 
   auto c_views = vkb_swapchain.get_image_views().value();
   swapchain_image_views.clear();
   swapchain_image_views.reserve(c_views.size());
   for (auto view : c_views)
-    swapchain_image_views.push_back(static_cast<vk::ImageView>(view));
+    swapchain_image_views.push_back(implicit_cast<vk::ImageView>(view));
 
   LOG_DEBUG_MSG("Swapchain created with {} images", swapchain_images.size());
 }
@@ -240,12 +239,12 @@ auto VulkanEngine::init_swapchain() -> void {
   rimg_allocinfo.requiredFlags = static_cast<VkMemoryPropertyFlagBits>(
       vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-  VkImageCreateInfo c_img_info = static_cast<VkImageCreateInfo>(rimg_info);
+  VkImageCreateInfo c_img_info = implicit_cast<VkImageCreateInfo>(rimg_info);
   VkImage c_image;
   VK_CHECK(static_cast<vk::Result>(
       vmaCreateImage(vma, &c_img_info, &rimg_allocinfo, &c_image,
                      &draw_img.allocation, nullptr)));
-  draw_img.img = static_cast<vk::Image>(c_image);
+  draw_img.img = implicit_cast<vk::Image>(c_image);
 
   LOG_DEBUG_MSG("Draw image created");
 
@@ -268,7 +267,7 @@ auto VulkanEngine::init_swapchain() -> void {
 
   del_queue.push_func([=, this]() {
     device.destroyImageView(draw_img.img_view);
-    vmaDestroyImage(vma, static_cast<VkImage>(draw_img.img),
+    vmaDestroyImage(vma, implicit_cast<VkImage>(draw_img.img),
                     draw_img.allocation);
   });
 }
@@ -462,8 +461,8 @@ auto VulkanEngine::cleanup() -> void {
   LOG_DEBUG_MSG("Logical device destroyed");
 
   vkb::destroy_debug_utils_messenger(
-      static_cast<VkInstance>(instance),
-      static_cast<VkDebugUtilsMessengerEXT>(dbg_msngr));
+      implicit_cast<VkInstance>(instance),
+      implicit_cast<VkDebugUtilsMessengerEXT>(dbg_msngr));
   LOG_DEBUG_MSG("Debug utils messenger destroyed");
 
   instance.destroy();
