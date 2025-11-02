@@ -13,3 +13,10 @@ C+c, C+v ts file: `./include/vulkan/vk_enum_string_helper.h` to `/usr/include/vu
 $ doas mkdir -p /usr/local/include/vulkan/
 $ doas cp -av ./include/vulkan/vk_enum_string_helper.h /usr/local/include/vulkan/vk_enum_string_helper.h
 ```
+
+requirements:
+wayland, linux, x86
+dxc (https://github.com/microsoft/DirectXShaderCompiler)
+glslang
+cmake 4.1
+

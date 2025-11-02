@@ -102,11 +102,16 @@ private:
   vk::DescriptorSet draw_img_descriptors;
   vk::DescriptorSetLayout draw_img_desc_set_layout;
 
+  vk::Pipeline gradient_pipeline;
+  vk::PipelineLayout gradient_pipeline_layout;
+
   void init_vulkan();
   void init_swapchain();
   void init_commands();
   void init_sync_structures();
   void init_descriptors();
+  void init_pipelines();
+  void init_background_pipelines();
   void create_swapchain(u32 width, u32 height);
   void draw_background(vk::CommandBuffer cmd);
   void destroy_swapchain();

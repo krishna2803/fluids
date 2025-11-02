@@ -1,3 +1,5 @@
+#include <cmath>
+#include <filesystem>
 #include <memory>
 
 #include "VkBootstrap.h"
@@ -5,8 +7,11 @@
 #include "vk_descriptors.hh"
 #include "vk_engine.hh"
 #include "vk_images.hh"
+#include "vk_pipelines.hh"
 #include "vk_types.hh"
 #include "vulkan/vulkan.hpp"
+
+namespace fs = std::filesystem;
 
 constexpr bool bUseValidationLayers = true;
 
@@ -54,6 +59,7 @@ auto VulkanEngine::init() -> void {
   init_commands();
   init_sync_structures();
   init_descriptors();
+  init_pipelines();
 
   is_initialized = true;
 }
@@ -119,9 +125,9 @@ auto VulkanEngine::init_vulkan() -> void {
   features12.setDescriptorIndexing(true);
   features12.setBufferDeviceAddress(true);
 
-  VkPhysicalDeviceVulkan13Features c_features13 =
+  auto c_features13 =
       implicit_cast<VkPhysicalDeviceVulkan13Features>(features13);
-  VkPhysicalDeviceVulkan12Features c_features12 =
+  auto c_features12 =
       implicit_cast<VkPhysicalDeviceVulkan12Features>(features12);
 
   LOG_DEBUG_MSG("Selecting physical device");
@@ -211,7 +217,7 @@ auto VulkanEngine::init_swapchain() -> void {
 
   LOG_INFO_MSG("Swapchain initialized");
 
-  vk::Extent3D draw_img_extent = {window_extent.width, window_extent.height, 1};
+  vk::Extent3D draw_img_extent{window_extent.width, window_extent.height, 1};
 
   draw_img.img_fmt = vk::Format::eR16G16B16A16Sfloat;
   draw_img.img_extent = draw_img_extent;
@@ -238,7 +244,7 @@ auto VulkanEngine::init_swapchain() -> void {
   rimg_allocinfo.requiredFlags = static_cast<VkMemoryPropertyFlagBits>(
       vk::MemoryPropertyFlagBits::eDeviceLocal);
 
-  VkImageCreateInfo c_img_info = implicit_cast<VkImageCreateInfo>(rimg_info);
+  auto c_img_info = implicit_cast<VkImageCreateInfo>(rimg_info);
   VkImage c_image;
   VK_CHECK(static_cast<vk::Result>(
       vmaCreateImage(vma, &c_img_info, &rimg_allocinfo, &c_image,
@@ -358,21 +364,58 @@ auto VulkanEngine::init_descriptors() -> void {
   });
 }
 
+auto VulkanEngine::init_pipelines() -> void { init_background_pipelines(); }
+
+auto VulkanEngine::init_background_pipelines() -> void {
+  vk::PipelineLayoutCreateInfo info{};
+  info.setPSetLayouts(&draw_img_desc_set_layout);
+  info.setSetLayoutCount(1);
+
+  gradient_pipeline_layout = device.createPipelineLayout(info);
+
+  auto shader_path =
+      (fs::path(ASSET_DIR) / "shaders/gradient.comp.spv").string();
+
+  auto compute_draw_shader_opt =
+      vkutil::load_shader_module(shader_path, device);
+  auto compute_draw_shader = compute_draw_shader_opt.value();
+
+  if (!compute_draw_shader_opt) {
+    LOG_ERROR_MSG("Error when building the compute shader.");
+    return;
+  }
+
+  vk::PipelineShaderStageCreateInfo stage_info{};
+  stage_info.setStage(vk::ShaderStageFlagBits::eCompute);
+  stage_info.setModule(compute_draw_shader);
+  stage_info.setPName("main");
+
+  vk::ComputePipelineCreateInfo create_info{};
+  create_info.setLayout(gradient_pipeline_layout);
+  create_info.setStage(stage_info);
+
+  auto res = device.createComputePipeline(vk::PipelineCache{}, create_info);
+  VK_CHECK(res.result);
+  gradient_pipeline = res.value;
+
+  device.destroyShaderModule(compute_draw_shader);
+
+  del_queue.push_func([&] {
+    device.destroyPipelineLayout(gradient_pipeline_layout);
+    device.destroyPipeline(gradient_pipeline);
+  });
+}
+
 auto VulkanEngine::draw_background(vk::CommandBuffer cmd) -> void {
-  float flash = (1.0f + std::sin(frame_number / 120.0f)) * 0.5f;
+  cmd.bindPipeline(vk::PipelineBindPoint::eCompute, gradient_pipeline);
+  cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+                         gradient_pipeline_layout, 0, 1, &draw_img_descriptors,
+                         0, nullptr);
 
-  vk::ClearColorValue clear_value{
-      std::array<float, 4>{flash, 0.0f, 0.0f, 1.0f}};
-
-  vk::ImageSubresourceRange clear_range{};
-  clear_range.setAspectMask(vk::ImageAspectFlagBits::eColor);
-  clear_range.setBaseMipLevel(0);
-  clear_range.setLevelCount(vk::RemainingMipLevels);
-  clear_range.setBaseArrayLayer(0);
-  clear_range.setLayerCount(vk::RemainingArrayLayers);
-
-  cmd.clearColorImage(draw_img.img, vk::ImageLayout::eGeneral, clear_value,
-                      clear_range);
+  // execute the compute pipeline dispatch. We are using 16x16 workgroup
+  // size so we need to divide by it
+  cmd.dispatch(std::ceil(draw_extent.width / 16.0),
+               std::ceil(draw_extent.height / 16.0), 1);
 }
 
 auto VulkanEngine::draw() -> void {

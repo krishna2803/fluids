@@ -18,6 +18,9 @@ find_program(CCACHE_PROGRAM ccache)
 set(CMAKE_CXX_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
 set(CMAKE_C_COMPILER_LAUNCHER ${CCACHE_PROGRAM})
 
+# glslang
+find_program(GLSL_VALIDATOR glslangValidator)
+
 
 # options for deps
 set(FASTGLTF_COMPILE_AS_CPP20 ON)
@@ -58,6 +61,9 @@ find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 # global compile options
 # required if QUILL_X86ARCH is set
 add_compile_options(-march=native -mtune=native)
+
+# use lld
+set(CMAKE_LINKER_TYPE LLD)
 
 # add subdirectories
 add_subdirectory(include/fastgltf)
@@ -105,15 +111,37 @@ target_link_libraries(
 # sources
 file(GLOB_RECURSE PROJECT_SOURCES "src/*.cc")
 
+# shader sources
+file(GLOB_RECURSE GLSL_SOURCE_FILES
+  "${PROJECT_SOURCE_DIR}/assets/shaders/*.frag"
+  "${PROJECT_SOURCE_DIR}/assets/shaders/*.vert"
+  "${PROJECT_SOURCE_DIR}/assets/shaders/*.comp"
+)
+
+# compile time definitions
+add_compile_definitions(ASSET_DIR="${CMAKE_SOURCE_DIR}/assets")
+
 # main bin
 add_executable(${PROJECT_NAME} ${PROJECT_SOURCES})
+
+# shaders
+foreach(GLSL ${GLSL_SOURCE_FILES})
+message(STATUS "BUILDING SHADER")
+  get_filename_component(FILE_NAME ${GLSL} NAME)
+  set(SPIRV "${PROJECT_SOURCE_DIR}/assets/shaders/${FILE_NAME}.spv")
+  message(STATUS ${GLSL})
+  add_custom_command(
+    OUTPUT ${SPIRV}
+    COMMAND ${GLSL_VALIDATOR} -V ${GLSL} -o ${SPIRV}
+    DEPENDS ${GLSL})
+  list(APPEND SPIRV_BINARY_FILES ${SPIRV})
+endforeach(GLSL)
 
 # config
 target_precompile_headers(
     ${PROJECT_NAME}
   PUBLIC 
     # <optional>
-    # <vector>
     # <memory>
     # <string>
     <vector>
@@ -169,4 +197,10 @@ add_custom_target(run
     ${PROJECT_NAME}
   WORKING_DIRECTORY
     ${CMAKE_CURRENT_BINARY_DIR}
+)
+
+# ninja shaders / make shaders
+add_custom_target(
+  shaders
+  DEPENDS ${SPIRV_BINARY_FILES}
 )
