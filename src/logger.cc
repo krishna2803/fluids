@@ -9,9 +9,8 @@ Logger &Logger::Get() {
 }
 
 Logger::~Logger() {
-  if (backend_started) {
+  if (backend_started)
     quill::Backend::stop();
-  }
 }
 
 void Logger::init() {

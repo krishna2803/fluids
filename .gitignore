@@ -208,3 +208,4 @@ __marimo__/
 
 # ignore clangd required files
 compile_commands.json
+*.spv
