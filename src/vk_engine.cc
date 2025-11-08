@@ -42,7 +42,7 @@ auto VulkanEngine::init() -> void {
   }
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+  glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
   window = glfwCreateWindow(window_extent.width, window_extent.height,
                             "Vulkan Engine", NULL, NULL);
 
@@ -374,7 +374,7 @@ auto VulkanEngine::init_background_pipelines() -> void {
   gradient_pipeline_layout = device.createPipelineLayout(info);
 
   auto shader_path =
-      (fs::path(ASSET_DIR) / "shaders/gradient.comp.spv").string();
+      (fs::path(ASSET_DIR) / "shaders/gradient.hlsl.spv").string();
 
   auto compute_draw_shader_opt =
       vkutil::load_shader_module(shader_path, device);

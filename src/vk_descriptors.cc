@@ -36,7 +36,7 @@ auto DescriptorAllocator::init_pool(vk::Device &device, u32 max_sets,
     vk::DescriptorPoolSize sz{};
     sz.type = ratio.type;
     sz.descriptorCount = implicit_cast<u32>(ratio.ratio * max_sets);
-    pool_sizes.emplace_back();
+    pool_sizes.emplace_back(sz);
   }
 
   vk::DescriptorPoolCreateInfo pool_info{};
