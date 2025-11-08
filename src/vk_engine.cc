@@ -374,10 +374,16 @@ auto VulkanEngine::init_background_pipelines() -> void {
   gradient_pipeline_layout = device.createPipelineLayout(info);
 
   auto shader_path =
-      (fs::path(ASSET_DIR) / "shaders/gradient.hlsl.spv").string();
+      (fs::path(ASSET_DIR) / "shaders/gradient.comp.hlsl.spv").string();
 
   auto compute_draw_shader_opt =
       vkutil::load_shader_module(shader_path, device);
+
+  if (!compute_draw_shader_opt) {
+    LOG_ERROR_MSG("Failed to load shader: {}", shader_path);
+    return;
+  }
+
   auto compute_draw_shader = compute_draw_shader_opt.value();
 
   if (!compute_draw_shader_opt) {
@@ -441,8 +447,8 @@ auto VulkanEngine::draw() -> void {
   vk::CommandBufferBeginInfo cmd_buf_beg_info{};
   cmd_buf_beg_info.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
 
-  draw_extent.width = window_extent.width;
-  draw_extent.height = window_extent.height;
+  draw_extent.width = swapchain_extent.width;
+  draw_extent.height = swapchain_extent.height;
 
   cmd.begin(cmd_buf_beg_info);
 
