@@ -175,8 +175,8 @@ foreach(GLSL ${GLSL_SOURCE_FILES})
   add_custom_command(
     OUTPUT ${SPIRV}
     COMMAND ${GLSL_VALIDATOR} -V 
-      # -Os
       ${GLSL} -o ${SPIRV}
+      # -Os
     DEPENDS ${GLSL}
     COMMENT "Compiling GLSL shader: ${FILE_NAME}"
   )
