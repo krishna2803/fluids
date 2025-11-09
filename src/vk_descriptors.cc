@@ -40,7 +40,7 @@ auto DescriptorAllocator::init_pool(vk::Device &device, u32 max_sets,
   }
 
   vk::DescriptorPoolCreateInfo pool_info{};
-  pool_info.setFlags(vk::DescriptorPoolCreateFlagBits{});
+  pool_info.setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet);
   pool_info.setMaxSets(max_sets);
   pool_info.setPoolSizeCount(pool_sizes.size());
   pool_info.setPPoolSizes(pool_sizes.data());
