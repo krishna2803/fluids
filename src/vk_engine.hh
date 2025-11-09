@@ -50,7 +50,7 @@ struct AllocatedImage {
 struct VulkanEngine {
   long frame_count = 0;
 
-  vk::Extent2D window_extent{800, 600};
+  vk::Extent2D window_extent{1200, 720};
 
   // singleton
   static VulkanEngine &Get();
@@ -124,4 +124,5 @@ private:
 
   void imm_submit(std::function<void(vk::CommandBuffer)> &&func);
   void init_imgui();
+  void draw_imgui(vk::CommandBuffer cmd, vk::ImageView target_img_view);
 };

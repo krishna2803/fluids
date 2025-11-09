@@ -487,6 +487,7 @@ auto VulkanEngine::init_imgui() -> void {
   }};
 
   vk::DescriptorPoolCreateInfo pool_info{};
+  pool_info.setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet);
   pool_info.setMaxSets(1000U);
   pool_info.setPoolSizeCount(pool_sizes.size());
   pool_info.setPPoolSizes(pool_sizes.data());
@@ -496,6 +497,10 @@ auto VulkanEngine::init_imgui() -> void {
   // 2: initialize imgui library
 
   ImGui::CreateContext();
+
+  ImGuiIO &io = ImGui::GetIO();
+  io.FontGlobalScale = 0.8f;
+
   ImGui_ImplGlfw_InitForVulkan(window, 1);
   ImGui_ImplVulkan_InitInfo init_info = {};
   init_info.Instance = instance;
@@ -535,6 +540,8 @@ auto VulkanEngine::init_imgui() -> void {
 }
 
 auto VulkanEngine::draw_background(vk::CommandBuffer cmd) -> void {
+  // LOG_TRACE("Drawing ImGui");
+
   cmd.bindPipeline(vk::PipelineBindPoint::eCompute, gradient_pipeline);
   cmd.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
                          gradient_pipeline_layout, 0, 1, &draw_img_descriptors,
@@ -544,6 +551,31 @@ auto VulkanEngine::draw_background(vk::CommandBuffer cmd) -> void {
   // size so we need to divide by it
   cmd.dispatch(std::ceil(draw_extent.width / 16.0),
                std::ceil(draw_extent.height / 16.0), 1);
+}
+
+auto VulkanEngine::draw_imgui(vk::CommandBuffer cmd,
+                              vk::ImageView target_img_view) -> void {
+  vk::RenderingAttachmentInfo colour_attachment{};
+  colour_attachment.setImageView(target_img_view);
+  colour_attachment.setLoadOp(vk::AttachmentLoadOp::eLoad);
+  colour_attachment.setStoreOp(vk::AttachmentStoreOp::eStore);
+  colour_attachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
+
+  vk::RenderingInfo render_info{};
+  render_info.setRenderArea(vk::Rect2D{vk::Offset2D{0, 0}, swapchain_extent});
+  render_info.setLayerCount(1);
+  render_info.setColorAttachmentCount(1);
+  render_info.setPColorAttachments(&colour_attachment);
+  render_info.setPStencilAttachment(nullptr);
+  render_info.setPDepthAttachment(nullptr);
+  render_info.setPStencilAttachment(nullptr);
+
+  cmd.beginRendering(render_info);
+
+  ImGui_ImplVulkan_RenderDrawData(ImGui::GetDrawData(),
+                                  implicit_cast<VkCommandBuffer>(cmd));
+
+  cmd.endRendering();
 }
 
 auto VulkanEngine::draw() -> void {
@@ -591,6 +623,12 @@ auto VulkanEngine::draw() -> void {
 
   vkutil::transition_image(cmd, swapchain_images[swapchain_image_idx],
                            vk::ImageLayout::eTransferDstOptimal,
+                           vk::ImageLayout::eColorAttachmentOptimal);
+
+  draw_imgui(cmd, swapchain_image_views[swapchain_image_idx]);
+
+  vkutil::transition_image(cmd, swapchain_images[swapchain_image_idx],
+                           vk::ImageLayout::eColorAttachmentOptimal,
                            vk::ImageLayout::ePresentSrcKHR);
 
   cmd.end();
