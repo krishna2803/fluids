@@ -11,6 +11,10 @@
 #include "vk_types.hh"
 #include "vulkan/vulkan.hpp"
 
+#include "imgui.h"
+#include "imgui_impl_glfw.h"
+#include "imgui_impl_vulkan.h"
+
 namespace fs = std::filesystem;
 
 constexpr bool bUseValidationLayers = true;
@@ -60,6 +64,7 @@ auto VulkanEngine::init() -> void {
   init_sync_structures();
   init_descriptors();
   init_pipelines();
+  init_imgui();
 
   is_initialized = true;
 }
@@ -82,6 +87,14 @@ auto VulkanEngine::run() -> void {
 
     if (frame_count % 2000 == 0)
       LOG_INFO_MSG("Frame Count {}", frame_count);
+
+    ImGui_ImplVulkan_NewFrame();
+    ImGui_ImplGlfw_NewFrame();
+    ImGui::NewFrame();
+
+    ImGui::ShowDemoWindow();
+
+    ImGui::Render();
 
     draw();
     frame_count++;
@@ -303,10 +316,21 @@ auto VulkanEngine::init_commands() -> void {
     cmd_alloc_info.setCommandBufferCount(1);
 
     auto buffers = device.allocateCommandBuffers(cmd_alloc_info);
-    frames[i].cmd_buf = buffers[0];
+    frames[i].cmd_buf = buffers.front();
 
     // LOG_TRACE("Created command pool and buffer for frame {}", i);
   }
+
+  imm_cmd_pool = device.createCommandPool(cmd_pool_info);
+  vk::CommandBufferAllocateInfo cmd_alloc_info{};
+  cmd_alloc_info.setCommandPool(imm_cmd_pool);
+  cmd_alloc_info.setLevel(vk::CommandBufferLevel::ePrimary);
+  cmd_alloc_info.setCommandBufferCount(1);
+
+  auto buffers = device.allocateCommandBuffers(cmd_alloc_info);
+  imm_cmd_buf = buffers.front();
+
+  del_queue.push_func([this]() { device.destroyCommandPool(imm_cmd_pool); });
 
   LOG_INFO_MSG("Commands initialized");
 }
@@ -327,6 +351,9 @@ auto VulkanEngine::init_sync_structures() -> void {
 
     // LOG_TRACE("Created sync structures for frame {}", i);
   }
+
+  imm_fence = device.createFence(fence_create_info);
+  del_queue.push_func([this]() { device.destroyFence(imm_fence); });
 
   LOG_INFO_MSG("Sync structures initialized");
 }
@@ -362,6 +389,8 @@ auto VulkanEngine::init_descriptors() -> void {
     global_desc_allocator.destroy_pool(device);
     device.destroyDescriptorSetLayout(draw_img_desc_set_layout);
   });
+
+  LOG_DEBUG_MSG("Descriptor sets initialized");
 }
 
 auto VulkanEngine::init_pipelines() -> void { init_background_pipelines(); }
@@ -410,6 +439,99 @@ auto VulkanEngine::init_background_pipelines() -> void {
     device.destroyPipelineLayout(gradient_pipeline_layout);
     device.destroyPipeline(gradient_pipeline);
   });
+}
+
+auto VulkanEngine::imm_submit(std::function<void(vk::CommandBuffer)> &&func)
+    -> void {
+  device.resetFences(imm_fence);
+  imm_cmd_buf.reset();
+
+  auto cmd = imm_cmd_buf;
+  vk::CommandBufferBeginInfo cmd_buf_beg_info{};
+  cmd_buf_beg_info.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+
+  cmd.begin(cmd_buf_beg_info);
+  func(cmd);
+  cmd.end();
+
+  vk::CommandBufferSubmitInfo cmd_buf_sub_info{};
+  cmd_buf_sub_info.setCommandBuffer(cmd);
+  cmd_buf_sub_info.setDeviceMask(0);
+
+  vk::SubmitInfo2 sub_info{};
+  sub_info.setCommandBufferInfoCount(1);
+  sub_info.setPCommandBufferInfos(&cmd_buf_sub_info);
+
+  graphics_queue.submit2(sub_info, imm_fence);
+
+  VK_CHECK(device.waitForFences(imm_fence, true, 1'000'000'000U));
+}
+
+auto VulkanEngine::init_imgui() -> void {
+  LOG_DEBUG_MSG("Initializing ImGui");
+  // 1: create descriptor pool for IMGUI
+  //  the size of the pool is very oversize, but it's copied from imgui demo
+  //  itself.
+  std::array<vk::DescriptorPoolSize, 11> pool_sizes = {{
+      {vk::DescriptorType::eSampler, 1000U},
+      {vk::DescriptorType::eCombinedImageSampler, 1000U},
+      {vk::DescriptorType::eSampledImage, 1000U},
+      {vk::DescriptorType::eStorageImage, 1000U},
+      {vk::DescriptorType::eUniformTexelBuffer, 1000U},
+      {vk::DescriptorType::eStorageTexelBuffer, 1000U},
+      {vk::DescriptorType::eUniformBuffer, 1000U},
+      {vk::DescriptorType::eStorageBuffer, 1000U},
+      {vk::DescriptorType::eUniformBufferDynamic, 1000U},
+      {vk::DescriptorType::eStorageBufferDynamic, 1000U},
+      {vk::DescriptorType::eInputAttachment, 1000U},
+  }};
+
+  vk::DescriptorPoolCreateInfo pool_info{};
+  pool_info.setMaxSets(1000U);
+  pool_info.setPoolSizeCount(pool_sizes.size());
+  pool_info.setPPoolSizes(pool_sizes.data());
+
+  imgui_pool = device.createDescriptorPool(pool_info);
+
+  // 2: initialize imgui library
+
+  ImGui::CreateContext();
+  ImGui_ImplGlfw_InitForVulkan(window, 1);
+  ImGui_ImplVulkan_InitInfo init_info = {};
+  init_info.Instance = instance;
+  init_info.PhysicalDevice = gpu;
+  init_info.Device = device;
+  init_info.Queue = graphics_queue;
+  init_info.DescriptorPool = imgui_pool;
+  init_info.MinImageCount = 3;
+  init_info.ImageCount = 3;
+  init_info.UseDynamicRendering = true;
+
+  init_info.PipelineInfoMain.PipelineRenderingCreateInfo.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+  init_info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount =
+      1;
+  // i hate doing reinterpret_cast but there is nothing we can do because ImGui
+  // accepts only C API
+  VkFormat imgui_format = static_cast<VkFormat>(swapchain_img_fmt);
+  init_info.PipelineInfoMain.PipelineRenderingCreateInfo
+      .pColorAttachmentFormats = &imgui_format;
+  init_info.PipelineInfoMain.PipelineRenderingCreateInfo
+      .pColorAttachmentFormats = &imgui_format;
+
+  init_info.PipelineInfoMain.MSAASamples =
+      static_cast<VkSampleCountFlagBits>(vk::SampleCountFlagBits::e1);
+
+  ImGui_ImplVulkan_Init(&init_info);
+
+  // ImGui_ImplVulkan_CreateFontsTexture();
+
+  del_queue.push_func([&]() {
+    ImGui_ImplVulkan_Shutdown();
+    device.destroyDescriptorPool(imgui_pool);
+  });
+
+  LOG_DEBUG_MSG("ImGui Initialized");
 }
 
 auto VulkanEngine::draw_background(vk::CommandBuffer cmd) -> void {

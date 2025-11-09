@@ -105,6 +105,12 @@ private:
   vk::Pipeline gradient_pipeline;
   vk::PipelineLayout gradient_pipeline_layout;
 
+  // imgui
+  vk::Fence imm_fence;
+  vk::CommandBuffer imm_cmd_buf;
+  vk::CommandPool imm_cmd_pool;
+  vk::DescriptorPool imgui_pool;
+
   void init_vulkan();
   void init_swapchain();
   void init_commands();
@@ -115,4 +121,7 @@ private:
   void create_swapchain(u32 width, u32 height);
   void draw_background(vk::CommandBuffer cmd);
   void destroy_swapchain();
+
+  void imm_submit(std::function<void(vk::CommandBuffer)> &&func);
+  void init_imgui();
 };
