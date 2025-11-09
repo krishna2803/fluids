@@ -54,6 +54,15 @@ struct ComputePushConstants {
   glm::vec4 data4;
 };
 
+struct ComputeEffect {
+  std::string_view name;
+
+  vk::Pipeline pipeline;
+  vk::PipelineLayout layout;
+
+  ComputePushConstants data;
+};
+
 struct VulkanEngine {
   long frame_count = 0;
 
@@ -117,6 +126,9 @@ private:
   vk::CommandBuffer imm_cmd_buf;
   vk::CommandPool imm_cmd_pool;
   vk::DescriptorPool imgui_pool;
+
+  std::vector<ComputeEffect> bg_effects;
+  int cur_bg_effect = 0;
 
   void init_vulkan();
   void init_swapchain();
