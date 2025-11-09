@@ -45,10 +45,18 @@ auto VulkanEngine::init() -> void {
     abort();
   }
 
+  auto dpi_scale =
+      ImGui_ImplGlfw_GetContentScaleForMonitor(glfwGetPrimaryMonitor());
+  LOG_INFO_MSG("DPI scale factor = {}.", dpi_scale);
+
+  u32 scaled_width = static_cast<u32>(window_extent.width * dpi_scale);
+  u32 scaled_height = static_cast<u32>(window_extent.height * dpi_scale);
+
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-  window = glfwCreateWindow(window_extent.width, window_extent.height,
-                            "Vulkan Engine", NULL, NULL);
+
+  window = glfwCreateWindow(scaled_width, scaled_height, "Vulkan Engine", NULL,
+                            NULL);
 
   LOG_INFO_MSG("GLFW Window Initialized");
 
@@ -226,11 +234,14 @@ auto VulkanEngine::create_swapchain(const u32 width, const u32 height) -> void {
 }
 
 auto VulkanEngine::init_swapchain() -> void {
-  create_swapchain(window_extent.width, window_extent.height);
+  int fb_width, fb_height;
+  glfwGetFramebufferSize(window, &fb_width, &fb_height);
+  create_swapchain(fb_width, fb_height);
 
   LOG_INFO_MSG("Swapchain initialized");
 
-  vk::Extent3D draw_img_extent{window_extent.width, window_extent.height, 1};
+  vk::Extent3D draw_img_extent{static_cast<u32>(fb_width),
+                               static_cast<u32>(fb_height), 1};
 
   draw_img.img_fmt = vk::Format::eR16G16B16A16Sfloat;
   draw_img.img_extent = draw_img_extent;
@@ -400,10 +411,18 @@ auto VulkanEngine::init_background_pipelines() -> void {
   info.setPSetLayouts(&draw_img_desc_set_layout);
   info.setSetLayoutCount(1);
 
+  vk::PushConstantRange push_const{};
+  push_const.setOffset(0);
+  push_const.setSize(sizeof(ComputePushConstants));
+  push_const.setStageFlags(vk::ShaderStageFlagBits::eCompute);
+
+  info.setPushConstantRangeCount(1);
+  info.setPPushConstantRanges(&push_const);
+
   gradient_pipeline_layout = device.createPipelineLayout(info);
 
   auto shader_path =
-      (fs::path(ASSET_DIR) / "shaders/gradient.comp.hlsl.spv").string();
+      (fs::path(ASSET_DIR) / "shaders/gradient_color.comp.hlsl.spv").string();
 
   auto compute_draw_shader_opt =
       vkutil::load_shader_module(shader_path, device);
@@ -499,7 +518,15 @@ auto VulkanEngine::init_imgui() -> void {
   ImGui::CreateContext();
 
   ImGuiIO &io = ImGui::GetIO();
-  io.FontGlobalScale = 0.8f;
+
+  auto dpi_scale =
+      ImGui_ImplGlfw_GetContentScaleForMonitor(glfwGetPrimaryMonitor());
+
+  auto font_path = (fs::path(ASSET_DIR) / "fonts/InterVariable.ttf").string();
+  io.Fonts->Clear();
+  io.Fonts->AddFontFromFileTTF(font_path.c_str(), 8.0f * dpi_scale);
+
+  ImGui::GetStyle().ScaleAllSizes(dpi_scale);
 
   ImGui_ImplGlfw_InitForVulkan(window, 1);
   ImGui_ImplVulkan_InitInfo init_info = {};
@@ -516,7 +543,7 @@ auto VulkanEngine::init_imgui() -> void {
       VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
   init_info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount =
       1;
-  // i hate doing reinterpret_cast but there is nothing we can do because ImGui
+  // i hate doing the casts but there is nothing we can do because ImGui
   // accepts only C API
   VkFormat imgui_format = static_cast<VkFormat>(swapchain_img_fmt);
   init_info.PipelineInfoMain.PipelineRenderingCreateInfo
@@ -547,8 +574,15 @@ auto VulkanEngine::draw_background(vk::CommandBuffer cmd) -> void {
                          gradient_pipeline_layout, 0, 1, &draw_img_descriptors,
                          0, nullptr);
 
-  // execute the compute pipeline dispatch. We are using 16x16 workgroup
-  // size so we need to divide by it
+  ComputePushConstants pc;
+  pc.data1 = glm::vec4{1, 0, 0, 1};
+  pc.data2 = glm::vec4{0, 0, 1, 1};
+
+  cmd.pushConstants(gradient_pipeline_layout, vk::ShaderStageFlagBits::eCompute,
+                    0, sizeof(pc), &pc);
+
+  // execute the compute pipeline dispatch. We are using 16x16
+  // workgroup size so we need to divide by it
   cmd.dispatch(std::ceil(draw_extent.width / 16.0),
                std::ceil(draw_extent.height / 16.0), 1);
 }
