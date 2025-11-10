@@ -57,7 +57,7 @@ endif()
 set(QUILL_X86ARCH ON)
 
 # required deps
-find_package(Eigen3 5.0.0 REQUIRED NO_MODULE)
+find_package(Eigen3 5.0 REQUIRED NO_MODULE)
 find_package(Vulkan REQUIRED)
 find_package(VulkanMemoryAllocator CONFIG REQUIRED)
 
@@ -98,18 +98,26 @@ set(IMGUI_SOURCES
 # build imgui lib
 add_library(imgui STATIC ${IMGUI_SOURCES})
 target_include_directories(
-    imgui
-  PUBLIC
-    ${IMGUI_DIR}
-    ${IMGUI_DIR}/backends
-    ${IMGUI_DIR}/misc/cpp
+  imgui
+    PUBLIC
+      ${IMGUI_DIR}
+      ${IMGUI_DIR}/backends
+      ${IMGUI_DIR}/misc/cpp
 )
 target_link_libraries(
-    imgui
-  PUBLIC
-    glfw
-    Vulkan::Vulkan
+  imgui
+    PUBLIC
+      glfw
+      Vulkan::Vulkan
 )
+
+target_compile_definitions(
+  imgui
+    PRIVATE
+      IMGUI_IMPL_GLFW_HAS_WAYLAND
+      GLFW_EXPOSE_NATIVE_X11=
+)
+
 
 # sources
 file(GLOB_RECURSE PROJECT_SOURCES "src/*.cc")
@@ -208,16 +216,16 @@ endforeach(HLSL)
 
 # config
 target_precompile_headers(
-    ${PROJECT_NAME}
-  PUBLIC 
-    # <optional>
-    # <memory>
-    # <string>
-    <vector>
-    # <unordered_map>
-    # <glm/mat4x4.hpp>
-    # <glm/vec4.hpp>
-    # <vulkan/vulkan.h>
+  ${PROJECT_NAME}
+    PUBLIC 
+      <optional>
+      # <memory>
+      <string>
+      <vector>
+      # <unordered_map>
+      # <glm/mat4x4.hpp>
+      <glm/vec4.hpp>
+      <vulkan/vulkan.h>
 )
 
 target_compile_features(${PROJECT_NAME} PRIVATE cxx_std_23)
@@ -226,36 +234,36 @@ set_target_properties(${PROJECT_NAME} PROPERTIES UNITY_BUILD ON)
 
 target_compile_options(
   ${PROJECT_NAME}
-  PRIVATE
-    -Wall
-    -Wextra
-    -Werror
-    # -O3
+    PRIVATE
+      -Wall
+      -Wextra
+      -Werror
+      # -O3
 )
 
 # headers
 target_include_directories(
-    ${PROJECT_NAME}
-  PRIVATE
-    ${CMAKE_SOURCE_DIR}/include
-    ${CMAKE_SOURCE_DIR}/src 
-    ${STB_INCLUDE_DIR}
+  ${PROJECT_NAME}
+    PRIVATE
+      ${CMAKE_SOURCE_DIR}/include
+      ${CMAKE_SOURCE_DIR}/src 
+      ${STB_INCLUDE_DIR}
 )
 
 # link libs
 target_link_libraries(
-    ${PROJECT_NAME}
-  PRIVATE
-    Eigen3::Eigen
-    fastgltf
-    glfw
-    glm
-    GPUOpen::VulkanMemoryAllocator
-    imgui
-    quill::quill
-    vk-bootstrap::vk-bootstrap
-    Vulkan::Vulkan
-    volk
+  ${PROJECT_NAME}
+    PRIVATE
+      Eigen3::Eigen
+      fastgltf
+      glfw
+      glm
+      GPUOpen::VulkanMemoryAllocator
+      imgui
+      quill::quill
+      vk-bootstrap::vk-bootstrap
+      Vulkan::Vulkan
+      volk
 )
 
 # ninja run / make run
@@ -271,7 +279,9 @@ add_custom_target(run
 # ninja shaders / make shaders
 add_custom_target(
   shaders
-  DEPENDS ${SPIRV_GLSL_FILES} ${SPIRV_HLSL_FILES}
+    DEPENDS
+      ${SPIRV_GLSL_FILES}
+      ${SPIRV_HLSL_FILES}
 )
 
 # ninja build / make build

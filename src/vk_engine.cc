@@ -47,18 +47,21 @@ auto VulkanEngine::init() -> void {
     abort();
   }
 
-  auto dpi_scale =
-      ImGui_ImplGlfw_GetContentScaleForMonitor(glfwGetPrimaryMonitor());
-  LOG_INFO_MSG("DPI scale factor = {}.", dpi_scale);
+  // FIX: Remove DPI scaling from window creation - handle it properly in ImGui
+  // auto dpi_scale =
+  //     ImGui_ImplGlfw_GetContentScaleForMonitor(glfwGetPrimaryMonitor());
+  // LOG_INFO_MSG("DPI scale factor = {}.", dpi_scale);
 
-  u32 scaled_width = static_cast<u32>(window_extent.width * dpi_scale);
-  u32 scaled_height = static_cast<u32>(window_extent.height * dpi_scale);
+  // u32 scaled_width = static_cast<u32>(window_extent.width * dpi_scale);
+  // u32 scaled_height = static_cast<u32>(window_extent.height * dpi_scale);
 
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
   glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+  glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_FALSE);
+  glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
 
-  window = glfwCreateWindow(scaled_width, scaled_height, "Vulkan Engine", NULL,
-                            NULL);
+  window = glfwCreateWindow(window_extent.width, window_extent.height,
+                            "Vulkan Engine", NULL, NULL);
 
   LOG_INFO_MSG("GLFW Window Initialized");
 
@@ -95,12 +98,35 @@ auto VulkanEngine::run() -> void {
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
       glfwSetWindowShouldClose(window, true);
 
-    if (frame_count % 2000 == 0)
+    if (frame_count % 2000 == 0) [[unlikely]]
       LOG_INFO_MSG("Frame Count {}", frame_count);
 
     ImGui_ImplVulkan_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
+
+    // Debug logging removed or reduced frequency
+    // if (frame_count % 60 == 0) {
+    //   int ww, wh, fbw, fbh;
+    //   glfwGetWindowSize(window, &ww, &wh);
+    //   glfwGetFramebufferSize(window, &fbw, &fbh);
+    //   auto &io = ImGui::GetIO();
+
+    //   (void)io;
+
+    //   double gx, gy;
+    //   glfwGetCursorPos(window, &gx, &gy);
+    //   float xscale, yscale;
+    //   glfwGetWindowContentScale(window, &xscale, &yscale);
+
+    //   // LOG_DEBUG_MSG("Frame {} | Window=({},{}) | FB=({},{}) | "
+    //   //               "Cursor=({:.1f},{:.1f}) | Mouse=({:.1f},{:.1f}) | "
+    //   //               "Display=({:.1f},{:.1f}) | FBScale=({:.2f},{:.2f})",
+    //   //               frame_count, ww, wh, fbw, fbh, gx, gy, io.MousePos.x,
+    //   //               io.MousePos.y, io.DisplaySize.x, io.DisplaySize.y,
+    //   //               io.DisplayFramebufferScale.x,
+    //   //               io.DisplayFramebufferScale.y);
+    // }
 
     if (ImGui::Begin("background")) {
       ComputeEffect &selected = bg_effects[cur_bg_effect];
@@ -108,16 +134,10 @@ auto VulkanEngine::run() -> void {
       ImGui::SliderInt("Effect Index", &cur_bg_effect, 0,
                        bg_effects.size() - 1);
 
-      auto &v = selected.data.data1;
-      auto &data1 = v[0];
-      auto &data2 = v[1];
-      auto &data3 = v[2];
-      auto &data4 = v[3];
-
-      ImGui::InputFloat4("data1", &data1);
-      ImGui::InputFloat4("data2", &data2);
-      ImGui::InputFloat4("data3", &data3);
-      ImGui::InputFloat4("data4", &data4);
+      ImGui::InputFloat4("data1", glm::value_ptr(selected.data.data1));
+      ImGui::InputFloat4("data2", glm::value_ptr(selected.data.data2));
+      ImGui::InputFloat4("data3", glm::value_ptr(selected.data.data3));
+      ImGui::InputFloat4("data4", glm::value_ptr(selected.data.data4));
     }
     ImGui::End();
     ImGui::Render();
@@ -255,9 +275,6 @@ auto VulkanEngine::init_swapchain() -> void {
   int fb_width, fb_height;
   glfwGetFramebufferSize(window, &fb_width, &fb_height);
   create_swapchain(fb_width, fb_height);
-
-  LOG_INFO_MSG("Swapchain initialized");
-
   vk::Extent3D draw_img_extent{static_cast<u32>(fb_width),
                                static_cast<u32>(fb_height), 1};
 
@@ -317,6 +334,8 @@ auto VulkanEngine::init_swapchain() -> void {
     vmaDestroyImage(vma, implicit_cast<VkImage>(draw_img.img),
                     draw_img.allocation);
   });
+
+  LOG_INFO_MSG("Swapchain initialized");
 }
 
 auto VulkanEngine::destroy_swapchain() -> void {
@@ -511,24 +530,24 @@ auto VulkanEngine::init_background_pipelines() -> void {
 
 auto VulkanEngine::imm_submit(std::function<void(vk::CommandBuffer)> &&func)
     -> void {
-  device.resetFences(imm_fence);
+  VK_CHECK(device.resetFences(1, &imm_fence));
   imm_cmd_buf.reset();
 
-  auto cmd = imm_cmd_buf;
-  vk::CommandBufferBeginInfo cmd_buf_beg_info{};
-  cmd_buf_beg_info.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+  vk::CommandBufferBeginInfo cmd_info{};
+  cmd_info.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
+  imm_cmd_buf.begin(cmd_info);
 
-  cmd.begin(cmd_buf_beg_info);
-  func(cmd);
-  cmd.end();
+  func(imm_cmd_buf);
 
-  vk::CommandBufferSubmitInfo cmd_buf_sub_info{};
-  cmd_buf_sub_info.setCommandBuffer(cmd);
-  cmd_buf_sub_info.setDeviceMask(0);
+  imm_cmd_buf.end();
+
+  vk::CommandBufferSubmitInfo cmd_sub_info{};
+  cmd_sub_info.setCommandBuffer(imm_cmd_buf);
+  cmd_sub_info.setDeviceMask(0);
 
   vk::SubmitInfo2 sub_info{};
   sub_info.setCommandBufferInfoCount(1);
-  sub_info.setPCommandBufferInfos(&cmd_buf_sub_info);
+  sub_info.setPCommandBufferInfos(&cmd_sub_info);
 
   graphics_queue.submit2(sub_info, imm_fence);
 
@@ -537,7 +556,7 @@ auto VulkanEngine::imm_submit(std::function<void(vk::CommandBuffer)> &&func)
 
 auto VulkanEngine::init_imgui() -> void {
   LOG_DEBUG_MSG("Initializing ImGui");
-  // 1: create descriptor pool for IMGUI
+  // 1: create descriptor pool for ImGUI
   //  the size of the pool is very oversize, but it's copied from imgui demo
   //  itself.
   std::array<vk::DescriptorPoolSize, 11> pool_sizes = {{
@@ -568,16 +587,16 @@ auto VulkanEngine::init_imgui() -> void {
 
   ImGuiIO &io = ImGui::GetIO();
 
-  auto dpi_scale =
-      ImGui_ImplGlfw_GetContentScaleForMonitor(glfwGetPrimaryMonitor());
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+  io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
+  // io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
   auto font_path = (fs::path(ASSET_DIR) / "fonts/InterVariable.ttf").string();
   io.Fonts->Clear();
-  io.Fonts->AddFontFromFileTTF(font_path.c_str(), 8.0f * dpi_scale);
+  io.Fonts->AddFontFromFileTTF(font_path.c_str(), 8.0f);
 
-  ImGui::GetStyle().ScaleAllSizes(dpi_scale);
+  ImGui_ImplGlfw_InitForVulkan(window, true);
 
-  ImGui_ImplGlfw_InitForVulkan(window, 1);
   ImGui_ImplVulkan_InitInfo init_info = {};
   init_info.Instance = instance;
   init_info.PhysicalDevice = gpu;
@@ -597,17 +616,21 @@ auto VulkanEngine::init_imgui() -> void {
   VkFormat imgui_format = static_cast<VkFormat>(swapchain_img_fmt);
   init_info.PipelineInfoMain.PipelineRenderingCreateInfo
       .pColorAttachmentFormats = &imgui_format;
-  init_info.PipelineInfoMain.PipelineRenderingCreateInfo
-      .pColorAttachmentFormats = &imgui_format;
 
   init_info.PipelineInfoMain.MSAASamples =
       static_cast<VkSampleCountFlagBits>(vk::SampleCountFlagBits::e1);
 
   ImGui_ImplVulkan_Init(&init_info);
 
-  // ImGui_ImplVulkan_CreateFontsTexture();
+  // FIX: Upload font atlas to GPU
+  // imm_submit(
+  // [&](vk::CommandBuffer cmd) { ImGui_ImplVulkan_CreateFontsTexture(); });
+
+  // FIX: Clear font textures from CPU memory after GPU upload
+  // ImGui_ImplVulkan_DestroyFontsTexture();
 
   del_queue.push_func([&]() {
+    ImGui_ImplGlfw_Shutdown();
     ImGui_ImplVulkan_Shutdown();
     device.destroyDescriptorPool(imgui_pool);
   });
@@ -682,8 +705,8 @@ auto VulkanEngine::draw() -> void {
   vk::CommandBufferBeginInfo cmd_buf_beg_info{};
   cmd_buf_beg_info.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
 
-  draw_extent.width = swapchain_extent.width;
-  draw_extent.height = swapchain_extent.height;
+  draw_extent.setWidth(swapchain_extent.width);
+  draw_extent.setHeight(swapchain_extent.height);
 
   cmd.begin(cmd_buf_beg_info);
 

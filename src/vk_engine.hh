@@ -66,7 +66,7 @@ struct ComputeEffect {
 struct VulkanEngine {
   long frame_count = 0;
 
-  vk::Extent2D window_extent{1200, 720};
+  vk::Extent2D window_extent{800, 600};
 
   // singleton
   static VulkanEngine &Get();
