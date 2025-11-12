@@ -137,6 +137,7 @@ private:
   void init_pipelines();
   void init_background_pipelines();
   void create_swapchain(u32 width, u32 height);
+  void rebuild_swapchain();
   void draw_background(vk::CommandBuffer cmd);
   void destroy_swapchain();
 

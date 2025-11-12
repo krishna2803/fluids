@@ -114,8 +114,7 @@ target_link_libraries(
 target_compile_definitions(
   imgui
     PRIVATE
-      IMGUI_IMPL_GLFW_HAS_WAYLAND
-      GLFW_EXPOSE_NATIVE_X11=
+      IMGUI_IMPL_GLFW_DISABLE_X11
 )
 
 

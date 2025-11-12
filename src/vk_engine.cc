@@ -26,7 +26,7 @@ static std::unique_ptr<VulkanEngine> loaded_engine = nullptr;
 VulkanEngine &VulkanEngine::Get() {
   return *(loaded_engine ? loaded_engine
                          : (loaded_engine = std::unique_ptr<VulkanEngine>(
-                                new VulkanEngine())));
+                                new VulkanEngine)));
 }
 
 auto VulkanEngine::init() -> void {
@@ -116,6 +116,7 @@ auto VulkanEngine::run() -> void {
       ImGui::InputFloat4("data3", glm::value_ptr(selected.data.data3));
       ImGui::InputFloat4("data4", glm::value_ptr(selected.data.data4));
     }
+
     ImGui::End();
     ImGui::Render();
 
@@ -311,6 +312,107 @@ auto VulkanEngine::init_swapchain() -> void {
   });
 
   LOG_INFO_MSG("Swapchain initialized");
+}
+
+auto VulkanEngine::rebuild_swapchain() -> void {
+  graphics_queue.waitIdle();
+
+  glfwGetWindowSize(window, reinterpret_cast<int *>(&window_extent.width),
+                    reinterpret_cast<int *>(window_extent.height));
+
+  vkb::SwapchainBuilder builder{implicit_cast<VkPhysicalDevice>(gpu),
+                                implicit_cast<VkDevice>(device),
+                                implicit_cast<VkSurfaceKHR>(surface)};
+
+  vkb::Swapchain vkb_swapchain =
+      builder.use_default_format_selection()
+          .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
+          .set_desired_min_image_count(2)
+          .set_desired_extent(window_extent.width, window_extent.height)
+          .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
+          .build()
+          .value();
+
+  swapchain = vkb_swapchain.swapchain;
+
+  auto c_images = vkb_swapchain.get_images().value();
+  swapchain_images.clear();
+  swapchain_images.reserve(c_images.size());
+  for (auto img : c_images)
+    swapchain_images.push_back(implicit_cast<vk::Image>(img));
+
+  auto c_views = vkb_swapchain.get_image_views().value();
+  swapchain_image_views.clear();
+  swapchain_image_views.reserve(c_views.size());
+  for (auto view : c_views)
+    swapchain_image_views.push_back(implicit_cast<vk::ImageView>(view));
+
+  swapchain_img_fmt = vk::Format(vkb_swapchain.image_format);
+
+  vk::Extent3D draw_img_extent{window_extent.width, window_extent.width, 1};
+
+  draw_img.img_fmt = vk::Format::eR16G16B16A16Sfloat;
+  draw_img.img_extent = draw_img_extent;
+
+  vk::ImageUsageFlags draw_img_use_flags =
+      vk::ImageUsageFlagBits::eTransferSrc |
+      vk::ImageUsageFlagBits::eTransferDst | vk::ImageUsageFlagBits::eStorage |
+      vk::ImageUsageFlagBits::eColorAttachment;
+
+  vk::ImageCreateInfo rimg_info{};
+  rimg_info.setImageType(vk::ImageType::e2D);
+  rimg_info.setFormat(draw_img.img_fmt);
+  rimg_info.setExtent(draw_img_extent);
+  rimg_info.setMipLevels(1);
+  rimg_info.setArrayLayers(1);
+  rimg_info.setSamples(vk::SampleCountFlagBits::e1);
+  rimg_info.setTiling(vk::ImageTiling::eOptimal);
+  rimg_info.setUsage(draw_img_use_flags);
+
+  VmaAllocationCreateInfo rimg_allocinfo = {};
+  rimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
+  rimg_allocinfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
+
+  auto c_img_info = implicit_cast<VkImageCreateInfo>(rimg_info);
+  VkImage c_image;
+  VK_CHECK(static_cast<vk::Result>(
+      vmaCreateImage(vma, &c_img_info, &rimg_allocinfo, &c_image,
+                     &draw_img.allocation, nullptr)));
+  draw_img.img = implicit_cast<vk::Image>(c_image);
+
+  vk::ImageViewCreateInfo rview_info{};
+  rview_info.setViewType(vk::ImageViewType::e2D);
+  rview_info.setImage(draw_img.img);
+  rview_info.setFormat(draw_img.img_fmt);
+
+  vk::ImageSubresourceRange subresource_range{};
+  subresource_range.setAspectMask(vk::ImageAspectFlagBits::eColor);
+  subresource_range.setBaseMipLevel(0);
+  subresource_range.setLevelCount(1);
+  subresource_range.setBaseArrayLayer(0);
+  subresource_range.setLayerCount(1);
+  rview_info.setSubresourceRange(subresource_range);
+
+  draw_img.img_view = device.createImageView(rview_info);
+
+  vk::DescriptorImageInfo img_info{};
+  img_info.setImageLayout(vk::ImageLayout::eGeneral);
+  img_info.setImageView(draw_img.img_view);
+
+  vk::WriteDescriptorSet cam_write{};
+  cam_write.setDstBinding(0);
+  cam_write.setDescriptorCount(1);
+  cam_write.setDescriptorType(vk::DescriptorType::eStorageImage);
+  cam_write.setImageInfo(img_info);
+  cam_write.setDstSet(draw_img_descriptors);
+
+  device.updateDescriptorSets(cam_write, nullptr);
+
+  del_queue.push_func([&] {
+    device.destroyImageView(draw_img.img_view);
+    vmaDestroyImage(vma, implicit_cast<VkImage>(draw_img.img),
+                    draw_img.allocation);
+  });
 }
 
 auto VulkanEngine::destroy_swapchain() -> void {
@@ -656,9 +758,9 @@ auto VulkanEngine::draw() -> void {
       swapchain, 1'000'000'000U, get_current_frame().swapchain_semaphore);
 
   if (result.result == vk::Result::eErrorOutOfDateKHR) {
-    LOG_ERROR_MSG("Out of date");
-    // ohno
-    // rebuild_swapchain();
+    LOG_ERROR_MSG("Out of date. Rebuilding Swapchain");
+    rebuild_swapchain();
+    LOG_INFO_MSG("Swapchain Rebuilt");
   }
 
   auto swapchain_image_idx = result.value;

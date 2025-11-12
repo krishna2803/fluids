@@ -21,5 +21,4 @@
 	url = https://github.com/zeux/volk.git
 [submodule "include/imgui"]
 	path = include/imgui
-	url = https://github.com/ocornut/imgui.git
-	branch = docking
+	url = https://github.com/krishna2803/imgui.git
