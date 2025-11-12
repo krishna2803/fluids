@@ -665,7 +665,7 @@ auto VulkanEngine::init_imgui() -> void {
 
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
   io.ConfigFlags |= ImGuiConfigFlags_NavEnableGamepad;
-  // io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+  io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
 
   auto font_path = (fs::path(ASSET_DIR) / "fonts/InterVariable.ttf").string();
   io.Fonts->Clear();
