@@ -87,7 +87,6 @@ struct VulkanEngine {
 
 private:
   bool is_initialized = false;
-  bool stop_rendering = false;
   VulkanEngine() = default;
   GLFWwindow *window;
 

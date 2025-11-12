@@ -35,6 +35,8 @@ auto VulkanEngine::init() -> void {
     return;
   }
 
+  glfwInitHint(GLFW_WAYLAND_LIBDECOR, GLFW_WAYLAND_DISABLE_LIBDECOR);
+
   if (!glfwInit()) {
     LOG_ERROR_MSG("Couldn't initialize GLFW.");
     abort();
@@ -47,16 +49,8 @@ auto VulkanEngine::init() -> void {
     abort();
   }
 
-  // FIX: Remove DPI scaling from window creation - handle it properly in ImGui
-  // auto dpi_scale =
-  //     ImGui_ImplGlfw_GetContentScaleForMonitor(glfwGetPrimaryMonitor());
-  // LOG_INFO_MSG("DPI scale factor = {}.", dpi_scale);
-
-  // u32 scaled_width = static_cast<u32>(window_extent.width * dpi_scale);
-  // u32 scaled_height = static_cast<u32>(window_extent.height * dpi_scale);
-
   glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-  glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+  glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
   glfwWindowHint(GLFW_SCALE_TO_MONITOR, GLFW_FALSE);
   glfwWindowHint(GLFW_DECORATED, GLFW_FALSE);
 
@@ -83,20 +77,27 @@ auto VulkanEngine::init() -> void {
 }
 
 auto VulkanEngine::run() -> void {
+  bool minimized = false;
+
   while (!glfwWindowShouldClose(window)) {
     glfwPollEvents();
 
-    stop_rendering = glfwGetWindowAttrib(window, GLFW_ICONIFIED);
-
-    // do not draw if we are minimized
-    // if (stop_rendering) {
-    //   // throttle the speed to avoid endless spinning
-    //   std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    //   continue;
-    // }
-
     if (glfwGetKey(window, GLFW_KEY_ESCAPE) == GLFW_PRESS)
       glfwSetWindowShouldClose(window, true);
+
+    bool iconified = glfwGetWindowAttrib(window, GLFW_ICONIFIED);
+
+    if (iconified) {
+      if (!minimized) {
+        minimized = true;
+        LOG_INFO_MSG("Window minimized pausing rendering");
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      continue;
+    } else if (minimized) {
+      minimized = false;
+      LOG_INFO_MSG("Window restored resuming rendering");
+    }
 
     if (frame_count % 2000 == 0) [[unlikely]]
       LOG_INFO_MSG("Frame Count {}", frame_count);
@@ -105,35 +106,11 @@ auto VulkanEngine::run() -> void {
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
-    // Debug logging removed or reduced frequency
-    // if (frame_count % 60 == 0) {
-    //   int ww, wh, fbw, fbh;
-    //   glfwGetWindowSize(window, &ww, &wh);
-    //   glfwGetFramebufferSize(window, &fbw, &fbh);
-    //   auto &io = ImGui::GetIO();
-
-    //   (void)io;
-
-    //   double gx, gy;
-    //   glfwGetCursorPos(window, &gx, &gy);
-    //   float xscale, yscale;
-    //   glfwGetWindowContentScale(window, &xscale, &yscale);
-
-    //   // LOG_DEBUG_MSG("Frame {} | Window=({},{}) | FB=({},{}) | "
-    //   //               "Cursor=({:.1f},{:.1f}) | Mouse=({:.1f},{:.1f}) | "
-    //   //               "Display=({:.1f},{:.1f}) | FBScale=({:.2f},{:.2f})",
-    //   //               frame_count, ww, wh, fbw, fbh, gx, gy, io.MousePos.x,
-    //   //               io.MousePos.y, io.DisplaySize.x, io.DisplaySize.y,
-    //   //               io.DisplayFramebufferScale.x,
-    //   //               io.DisplayFramebufferScale.y);
-    // }
-
     if (ImGui::Begin("background")) {
-      ComputeEffect &selected = bg_effects[cur_bg_effect];
+      auto &selected = bg_effects[cur_bg_effect];
       ImGui::Text("Selected effect: %s", selected.name.data());
       ImGui::SliderInt("Effect Index", &cur_bg_effect, 0,
-                       bg_effects.size() - 1);
-
+                       static_cast<int>(bg_effects.size()) - 1);
       ImGui::InputFloat4("data1", glm::value_ptr(selected.data.data1));
       ImGui::InputFloat4("data2", glm::value_ptr(selected.data.data2));
       ImGui::InputFloat4("data3", glm::value_ptr(selected.data.data3));
@@ -142,8 +119,12 @@ auto VulkanEngine::run() -> void {
     ImGui::End();
     ImGui::Render();
 
-    draw();
-    frame_count++;
+    try {
+      draw();
+      frame_count++;
+    } catch (const std::exception &e) {
+      LOG_ERROR_MSG("Draw error: {}", e.what());
+    }
   }
 }
 
@@ -164,8 +145,9 @@ auto VulkanEngine::init_vulkan() -> void {
 
   LOG_DEBUG_MSG("Creating window surface");
   VkSurfaceKHR c_surface;
-  VkResult glfw_result = glfwCreateWindowSurface(
+  auto glfw_result = glfwCreateWindowSurface(
       implicit_cast<VkInstance>(instance), window, nullptr, &c_surface);
+
   if (glfw_result != VK_SUCCESS) {
     LOG_ERROR_MSG("Failed to create window surface. GLFW Error: {}",
                   std::to_string(glfw_result));
@@ -213,11 +195,12 @@ auto VulkanEngine::init_vulkan() -> void {
 
   vk::PhysicalDeviceProperties device_properties = gpu.getProperties();
 
-  LOG_INFO_MSG("GPU: {}", device_properties.deviceName.data());
+  LOG_DEBUG_MSG("GPU: {}", device_properties.deviceName.data());
 
   LOG_INFO_MSG("Vulkan initialized successfully");
 
   LOG_DEBUG_MSG("Creating VMA allocator");
+
   VmaAllocatorCreateInfo vma_info{};
   vma_info.physicalDevice = implicit_cast<VkPhysicalDevice>(gpu);
   vma_info.device = implicit_cast<VkDevice>(device);
@@ -239,16 +222,12 @@ auto VulkanEngine::create_swapchain(const u32 width, const u32 height) -> void {
 
   vkb::Swapchain vkb_swapchain =
       builder
-          .set_desired_format(VkSurfaceFormatKHR{
-              .format = static_cast<VkFormat>(swapchain_img_fmt),
-              .colorSpace = static_cast<VkColorSpaceKHR>(
-                  vk::ColorSpaceKHR::eVkColorspaceSrgbNonlinear)})
-          .set_desired_present_mode(
-              static_cast<VkPresentModeKHR>(vk::PresentModeKHR::eFifo))
+          .set_desired_format(implicit_cast<VkSurfaceFormatKHR>(
+              vk::SurfaceFormatKHR{swapchain_img_fmt}))
+          .set_desired_present_mode(VK_PRESENT_MODE_FIFO_KHR)
           .set_desired_min_image_count(2)
           .set_desired_extent(width, height)
-          .add_image_usage_flags(static_cast<VkImageUsageFlags>(
-              vk::ImageUsageFlagBits::eTransferDst))
+          .add_image_usage_flags(VK_IMAGE_USAGE_TRANSFER_DST_BIT)
           .build()
           .value();
 
@@ -272,11 +251,8 @@ auto VulkanEngine::create_swapchain(const u32 width, const u32 height) -> void {
 }
 
 auto VulkanEngine::init_swapchain() -> void {
-  int fb_width, fb_height;
-  glfwGetFramebufferSize(window, &fb_width, &fb_height);
-  create_swapchain(fb_width, fb_height);
-  vk::Extent3D draw_img_extent{static_cast<u32>(fb_width),
-                               static_cast<u32>(fb_height), 1};
+  create_swapchain(window_extent.width, window_extent.height);
+  vk::Extent3D draw_img_extent{window_extent.width, window_extent.width, 1};
 
   draw_img.img_fmt = vk::Format::eR16G16B16A16Sfloat;
   draw_img.img_extent = draw_img_extent;
@@ -295,13 +271,12 @@ auto VulkanEngine::init_swapchain() -> void {
   rimg_info.setSamples(vk::SampleCountFlagBits::e1);
   rimg_info.setTiling(vk::ImageTiling::eOptimal);
   rimg_info.setUsage(draw_img_use_flags);
-  rimg_info.setSharingMode(vk::SharingMode::eExclusive);
-  rimg_info.setInitialLayout(vk::ImageLayout::eUndefined);
+  // rimg_info.setSharingMode(vk::SharingMode::eExclusive);
+  // rimg_info.setInitialLayout(vk::ImageLayout::eUndefined);
 
   VmaAllocationCreateInfo rimg_allocinfo = {};
   rimg_allocinfo.usage = VMA_MEMORY_USAGE_GPU_ONLY;
-  rimg_allocinfo.requiredFlags = static_cast<VkMemoryPropertyFlagBits>(
-      vk::MemoryPropertyFlagBits::eDeviceLocal);
+  rimg_allocinfo.requiredFlags = VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT;
 
   auto c_img_info = implicit_cast<VkImageCreateInfo>(rimg_info);
   VkImage c_image;
@@ -313,8 +288,8 @@ auto VulkanEngine::init_swapchain() -> void {
   LOG_DEBUG_MSG("Draw image created");
 
   vk::ImageViewCreateInfo rview_info{};
-  rview_info.setImage(draw_img.img);
   rview_info.setViewType(vk::ImageViewType::e2D);
+  rview_info.setImage(draw_img.img);
   rview_info.setFormat(draw_img.img_fmt);
 
   vk::ImageSubresourceRange subresource_range{};
@@ -551,7 +526,7 @@ auto VulkanEngine::imm_submit(std::function<void(vk::CommandBuffer)> &&func)
 
   graphics_queue.submit2(sub_info, imm_fence);
 
-  VK_CHECK(device.waitForFences(imm_fence, true, 1'000'000'000U));
+  VK_CHECK(device.waitForFences(imm_fence, true, 9'999'999'999U));
 }
 
 auto VulkanEngine::init_imgui() -> void {
@@ -576,8 +551,7 @@ auto VulkanEngine::init_imgui() -> void {
   vk::DescriptorPoolCreateInfo pool_info{};
   pool_info.setFlags(vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet);
   pool_info.setMaxSets(1000U);
-  pool_info.setPoolSizeCount(pool_sizes.size());
-  pool_info.setPPoolSizes(pool_sizes.data());
+  pool_info.setPoolSizes(pool_sizes);
 
   imgui_pool = device.createDescriptorPool(pool_info);
 
@@ -611,23 +585,15 @@ auto VulkanEngine::init_imgui() -> void {
       VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
   init_info.PipelineInfoMain.PipelineRenderingCreateInfo.colorAttachmentCount =
       1;
-  // i hate doing the casts but there is nothing we can do because ImGui
-  // accepts only C API
-  VkFormat imgui_format = static_cast<VkFormat>(swapchain_img_fmt);
+  // i hate doing the reinterpret_cast but there is nothing we can do because
+  // ImGui accepts only C API
   init_info.PipelineInfoMain.PipelineRenderingCreateInfo
-      .pColorAttachmentFormats = &imgui_format;
+      .pColorAttachmentFormats =
+      reinterpret_cast<VkFormat *>(&swapchain_img_fmt);
 
-  init_info.PipelineInfoMain.MSAASamples =
-      static_cast<VkSampleCountFlagBits>(vk::SampleCountFlagBits::e1);
+  init_info.PipelineInfoMain.MSAASamples = VK_SAMPLE_COUNT_1_BIT;
 
   ImGui_ImplVulkan_Init(&init_info);
-
-  // FIX: Upload font atlas to GPU
-  // imm_submit(
-  // [&](vk::CommandBuffer cmd) { ImGui_ImplVulkan_CreateFontsTexture(); });
-
-  // FIX: Clear font textures from CPU memory after GPU upload
-  // ImGui_ImplVulkan_DestroyFontsTexture();
 
   del_queue.push_func([&]() {
     ImGui_ImplGlfw_Shutdown();
@@ -661,18 +627,14 @@ auto VulkanEngine::draw_imgui(vk::CommandBuffer cmd,
                               vk::ImageView target_img_view) -> void {
   vk::RenderingAttachmentInfo colour_attachment{};
   colour_attachment.setImageView(target_img_view);
+  colour_attachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
   colour_attachment.setLoadOp(vk::AttachmentLoadOp::eLoad);
   colour_attachment.setStoreOp(vk::AttachmentStoreOp::eStore);
-  colour_attachment.setImageLayout(vk::ImageLayout::eColorAttachmentOptimal);
 
   vk::RenderingInfo render_info{};
   render_info.setRenderArea(vk::Rect2D{vk::Offset2D{0, 0}, swapchain_extent});
   render_info.setLayerCount(1);
-  render_info.setColorAttachmentCount(1);
-  render_info.setPColorAttachments(&colour_attachment);
-  render_info.setPStencilAttachment(nullptr);
-  render_info.setPDepthAttachment(nullptr);
-  render_info.setPStencilAttachment(nullptr);
+  render_info.setColorAttachments(colour_attachment);
 
   cmd.beginRendering(render_info);
 
@@ -685,17 +647,23 @@ auto VulkanEngine::draw_imgui(vk::CommandBuffer cmd,
 auto VulkanEngine::draw() -> void {
   // LOG_TRACE("Drawing frame {}", frame_number);
 
-  auto wait_result = device.waitForFences(get_current_frame().render_fence,
-                                          true, 1'000'000'000U);
-  VK_CHECK(wait_result);
+  VK_CHECK(device.waitForFences(get_current_frame().render_fence, true,
+                                1'000'000'000U));
 
   get_current_frame().del_queue.flush();
 
-  device.resetFences(get_current_frame().render_fence);
-
-  auto [result, swapchain_image_idx] = device.acquireNextImageKHR(
+  auto result = device.acquireNextImageKHR(
       swapchain, 1'000'000'000U, get_current_frame().swapchain_semaphore);
-  VK_CHECK(result);
+
+  if (result.result == vk::Result::eErrorOutOfDateKHR) {
+    LOG_ERROR_MSG("Out of date");
+    // ohno
+    // rebuild_swapchain();
+  }
+
+  auto swapchain_image_idx = result.value;
+
+  device.resetFences(get_current_frame().render_fence);
 
   // LOG_TRACE("Acquired swapchain image {}", swapchain_image_idx);
 
@@ -705,8 +673,8 @@ auto VulkanEngine::draw() -> void {
   vk::CommandBufferBeginInfo cmd_buf_beg_info{};
   cmd_buf_beg_info.setFlags(vk::CommandBufferUsageFlagBits::eOneTimeSubmit);
 
-  draw_extent.setWidth(swapchain_extent.width);
-  draw_extent.setHeight(swapchain_extent.height);
+  draw_extent.setWidth(draw_img.img_extent.width);
+  draw_extent.setHeight(draw_img.img_extent.height);
 
   cmd.begin(cmd_buf_beg_info);
 
@@ -754,21 +722,16 @@ auto VulkanEngine::draw() -> void {
   signal_info.setDeviceIndex(0);
 
   vk::SubmitInfo2 sub_info{};
-  sub_info.setWaitSemaphoreInfoCount(1);
-  sub_info.setPWaitSemaphoreInfos(&wait_info);
-  sub_info.setCommandBufferInfoCount(1);
-  sub_info.setPCommandBufferInfos(&cmd_buf_sub_info);
-  sub_info.setSignalSemaphoreInfoCount(1);
-  sub_info.setPSignalSemaphoreInfos(&signal_info);
+  sub_info.setCommandBufferInfos(cmd_buf_sub_info);
+  sub_info.setWaitSemaphoreInfos(wait_info);
+  sub_info.setSignalSemaphoreInfos(signal_info);
 
   graphics_queue.submit2(sub_info, get_current_frame().render_fence);
 
   vk::PresentInfoKHR present_info{};
-  present_info.setWaitSemaphoreCount(1);
-  present_info.setPWaitSemaphores(&get_current_frame().render_semaphore);
-  present_info.setSwapchainCount(1);
-  present_info.setPSwapchains(&swapchain);
-  present_info.setPImageIndices(&swapchain_image_idx);
+  present_info.setWaitSemaphores(get_current_frame().render_semaphore);
+  present_info.setSwapchains(swapchain);
+  present_info.setImageIndices(swapchain_image_idx);
 
   VK_CHECK(graphics_queue.presentKHR(present_info));
 
